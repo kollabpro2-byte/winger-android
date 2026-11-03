@@ -106,6 +106,8 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun getSystemProxyStatus() = null
     override fun setSystemProxyEnabled(enabled: Boolean) {}
     override fun writeDebugMessage(message: String?) { Log.d(TAG, message.orEmpty()) }
+    override fun connectSSHAgent(): Int = -1
+    override fun triggerNativeCrash() { error("native crash disabled") }
 
     override fun sendNotification(notification: BoxNotification?) {}
     override fun cancelNotification(identifier: String?, typeID: Int) {}

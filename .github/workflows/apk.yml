@@ -17,9 +17,9 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-35 build-tools;35.0.0 platform-tools ndk;28.2.13676358
-      - name: Cache libbox
+      - name: Restore libbox
         id: libbox
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: app/libs/libbox.aar
           key: libbox-singbox-1.14-ndk28
@@ -38,6 +38,12 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           find . -name 'libbox.aar' -exec cp {} "$GITHUB_WORKSPACE/app/libs/libbox.aar" \;
           ls -la "$GITHUB_WORKSPACE/app/libs"
+      - name: Save libbox
+        if: steps.libbox.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-singbox-1.14-ndk28
       - name: Build APK
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
