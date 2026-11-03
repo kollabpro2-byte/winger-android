@@ -1,0 +1,40 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: android-actions/setup-android@v3
+      - name: Build libbox
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc libc6-dev make
+          git clone --depth 1 https://github.com/SagerNet/sing-box.git /tmp/sing-box
+          cd /tmp/sing-box
+          go install -v github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install -v github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          gomobile init
+          go run ./cmd/internal/build_libbox -target android
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          find . -name 'libbox.aar' -exec cp {} "$GITHUB_WORKSPACE/app/libs/libbox.aar" \;
+          ls -la "$GITHUB_WORKSPACE/app/libs"
+      - name: Build APK
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          gradle wrapper --gradle-version 8.7
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winger-apk
+          path: app/build/outputs/apk/debug/*.apk
