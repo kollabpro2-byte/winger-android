@@ -17,7 +17,14 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-35 build-tools;35.0.0 platform-tools ndk;28.2.13676358
+      - name: Cache libbox
+        id: libbox
+        uses: actions/cache@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-singbox-1.14-ndk28
       - name: Build libbox
+        if: steps.libbox.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update && sudo apt-get install -y gcc libc6-dev make unzip
           git clone --depth 1 https://github.com/SagerNet/sing-box.git /tmp/sing-box
@@ -34,6 +41,7 @@ jobs:
       - name: Build APK
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          test -f app/libs/libbox.aar
           gradle wrapper --gradle-version 8.7
           chmod +x ./gradlew
           ./gradlew assembleDebug --no-daemon
