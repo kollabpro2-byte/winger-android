@@ -43,8 +43,10 @@ object Api {
     fun fetchConfig(url: String, hwid: String): String {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "Winger/1.0/android")
+            // Remnawave отдаёт готовый sing-box JSON только клиентам sfa/singbox.
+            setRequestProperty("User-Agent", "sfa/1.11.0")
             setRequestProperty("x-hwid", hwid)
+            setRequestProperty("x-device-os", "Android")
             connectTimeout = 15000
             readTimeout = 20000
         }

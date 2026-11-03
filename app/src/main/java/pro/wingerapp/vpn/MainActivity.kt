@@ -40,7 +40,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.net.Sub
-import java.util.Base64
 
 private val Bg = Color(0xFF040D1A)
 private val Elev = Color(0xFF0A162A)
@@ -53,16 +52,16 @@ private val TabOff = Color(0xFF7C6A9A)
 private val Line = Color(0x14FFFFFF)
 
 class MainActivity : ComponentActivity() {
-    private var pendingLink: String? = null
+    private var pendingConfig: String? = null
     private val vpnPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        val link = pendingLink ?: return@registerForActivityResult
-        startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_LINK, link))
+        val cfg = pendingConfig ?: return@registerForActivityResult
+        startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_CONFIG, cfg))
     }
-    fun connect(link: String) {
-        pendingLink = link
+    fun connect(config: String) {
+        pendingConfig = config
         val prep = VpnService.prepare(this)
         if (prep != null) vpnPerm.launch(prep)
-        else startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_LINK, link))
+        else startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_CONFIG, config))
     }
     fun disconnect() { startService(Intent(this, WingerVpnService::class.java).setAction("STOP")) }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,8 +71,6 @@ class MainActivity : ComponentActivity() {
     private fun hwid() = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         ?.padEnd(16, '0')?.take(32) ?: "winger-android-device"
 }
-
-private data class Node(val name: String, val raw: String)
 
 @Composable
 fun App(hwid: String, connect: (String) -> Unit) {
@@ -132,8 +129,9 @@ fun Home(hwid: String, connect: (String) -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     var on by remember { mutableStateOf(false) }
     var sub by remember { mutableStateOf<Sub?>(null) }
-    var nodes by remember { mutableStateOf(listOf<Node>()) }
-    var place by remember { mutableStateOf("Автопилот") }
+    var raw by remember { mutableStateOf("") }
+    var servers by remember { mutableStateOf(listOf<String>()) }
+    var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -142,7 +140,12 @@ fun Home(hwid: String, connect: (String) -> Unit) {
             runCatching {
                 val s = Api.subscription()
                 sub = s
-                if (s != null && s.url.isNotBlank()) nodes = parse(Api.fetchConfig(s.url, hwid))
+                if (s != null && s.url.isNotBlank()) {
+                    val cfg = readSubConfig(Api.fetchConfig(s.url, hwid))
+                    raw = cfg.raw
+                    servers = cfg.servers
+                    place = cfg.servers.first()
+                }
             }.onFailure { err = it.message }
         }
     }
@@ -161,10 +164,9 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     Image(
                         painterResource(R.drawable.eagle), "Winger",
                         modifier = Modifier.size(240.dp).alpha(if (on) 1f else 0.45f).clickable {
-                            if (nodes.isEmpty()) return@clickable
+                            if (raw.isBlank() || place.isBlank()) return@clickable
                             if (on) { on = false; return@clickable }
-                            val link = nodes.firstOrNull { it.name == place }?.raw ?: nodes.first().raw
-                            connect(link)
+                            connect(configFor(raw, place))
                             on = true
                         },
                         contentScale = ContentScale.Fit
@@ -189,18 +191,20 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     Stat((sub?.devices ?: 4).toString(), "устройства")
                 }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
-                if (nodes.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
-                nodes.forEach { n ->
+                if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
+                servers.forEach { name ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp)).background(Elev)
-                            .border(1.dp, if (place == n.name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
-                            .clickable { place = n.name; connect(n.raw); on = true }.padding(12.dp),
+                            .border(1.dp, if (place == name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
+                            .clickable {
+                                place = name
+                                connect(configFor(raw, name))
+                                on = true
+                            }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(n.name, color = Color.White, fontWeight = FontWeight.SemiBold)
-                        }
+                        Text(name, color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 Spacer(Modifier.height(96.dp))
@@ -234,19 +238,4 @@ private fun RowScope.Stat(v: String, l: String) {
         Text(v, color = Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Text(l, color = Dim, fontSize = 11.sp)
     }
-}
-
-private fun parse(body: String): List<Node> {
-    val text = body.trim()
-    val decoded = runCatching { String(Base64.getDecoder().decode(text)) }.getOrDefault(text)
-    return decoded.lineSequence()
-        .map { it.trim() }
-        .filter { it.startsWith("vless://") }
-        .map { link ->
-            val name = link.substringAfter("#", "Сервер").let {
-                runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it)
-            }
-            Node(name, link)
-        }
-        .toList()
 }

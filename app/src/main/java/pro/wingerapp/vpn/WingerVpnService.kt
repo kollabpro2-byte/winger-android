@@ -27,7 +27,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, note())
-        val link = intent?.getStringExtra(EXTRA_LINK) ?: return stop()
+        val config = intent?.getStringExtra(EXTRA_CONFIG) ?: return stop()
         Thread {
             try {
                 Libbox.setup(SetupOptions().apply {
@@ -38,7 +38,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 val cmd = CommandServer(this, this)
                 cmd.start()
                 server = cmd
-                cmd.startOrReloadService(singBoxConfig(link), OverrideOptions())
+                cmd.startOrReloadService(config, OverrideOptions())
             } catch (e: Exception) {
                 Log.e(TAG, "start failed", e)
                 stop()
@@ -127,7 +127,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         throw UnsupportedOperationException()
 
     companion object {
-        const val EXTRA_LINK = "link"
+        const val EXTRA_CONFIG = "config"
         private const val TAG = "WingerVPN"
     }
 }
