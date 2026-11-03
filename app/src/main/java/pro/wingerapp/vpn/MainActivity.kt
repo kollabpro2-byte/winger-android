@@ -1,5 +1,6 @@
 package pro.wingerapp.vpn
 
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
@@ -7,6 +8,12 @@ import android.provider.Settings
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,8 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -38,6 +47,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.net.Sub
 
@@ -66,25 +78,33 @@ class MainActivity : ComponentActivity() {
     fun disconnect() { startService(Intent(this, WingerVpnService::class.java).setAction("STOP")) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { App(hwid(), ::connect) }
+        setContent { App(this, hwid(), ::connect) }
     }
     private fun hwid() = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         ?.padEnd(16, '0')?.take(32) ?: "winger-android-device"
 }
 
 @Composable
-fun App(hwid: String, connect: (String) -> Unit) {
+fun App(ctx: Context, hwid: String, connect: (String) -> Unit) {
     var authed by remember { mutableStateOf(false) }
-    if (!authed) Login { authed = true } else Home(hwid, connect)
+    if (!authed) Login(ctx) { authed = true } else Home(hwid, connect)
 }
 
 @Composable
-fun Login(onOk: () -> Unit) {
-    var user by remember { mutableStateOf("") }
-    var pass by remember { mutableStateOf("") }
+fun Login(ctx: Context, onOk: () -> Unit) {
+    var user by remember { mutableStateOf(Store.login(ctx)) }
+    var pass by remember { mutableStateOf(Store.password(ctx)) }
     var err by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (user.isNotBlank() && pass.isNotBlank()) {
+            busy = true
+            val e = withContext(Dispatchers.IO) { runCatching { Api.login(user, pass) }.getOrElse { it.message } }
+            busy = false
+            if (e == null) onOk() else err = e
+        }
+    }
     Column(
         Modifier.fillMaxSize().background(Bg).padding(24.dp),
         verticalArrangement = Arrangement.Center
@@ -103,7 +123,7 @@ fun Login(onOk: () -> Unit) {
                     scope.launch {
                         val e = withContext(Dispatchers.IO) { runCatching { Api.login(user, pass) }.getOrElse { it.message } }
                         busy = false
-                        if (e == null) onOk() else err = e
+                        if (e == null) { Store.save(ctx, user, pass); onOk() } else err = e
                     }
                 }.padding(14.dp),
             contentAlignment = Alignment.Center
@@ -130,7 +150,8 @@ fun Home(hwid: String, connect: (String) -> Unit) {
     var on by remember { mutableStateOf(false) }
     var sub by remember { mutableStateOf<Sub?>(null) }
     var raw by remember { mutableStateOf("") }
-    var servers by remember { mutableStateOf(listOf<String>()) }
+    var servers by remember { mutableStateOf(listOf<ServerNode>()) }
+    var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -144,7 +165,8 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     val cfg = readSubConfig(Api.fetchConfig(s.url, hwid))
                     raw = cfg.raw
                     servers = cfg.servers
-                    place = cfg.servers.first()
+                    place = cfg.servers.first().name
+                    pings = cfg.servers.associate { it.name to tcpPing(it.host, it.port) }
                 }
             }.onFailure { err = it.message }
         }
@@ -160,10 +182,11 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     fontSize = 16.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(top = 28.dp)
                 )
-                Box(Modifier.fillMaxWidth().height(260.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) {
+                    if (on) SiteParticles()
                     Image(
                         painterResource(R.drawable.eagle), "Winger",
-                        modifier = Modifier.size(240.dp).alpha(if (on) 1f else 0.45f).clickable {
+                        modifier = Modifier.size(250.dp).alpha(if (on) 1f else 0.45f).clickable {
                             if (raw.isBlank() || place.isBlank()) return@clickable
                             if (on) { on = false; return@clickable }
                             connect(configFor(raw, place))
@@ -192,19 +215,23 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
-                servers.forEach { name ->
+                servers.forEach { node ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp)).background(Elev)
-                            .border(1.dp, if (place == name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
+                            .border(1.dp, if (place == node.name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
                             .clickable {
-                                place = name
-                                connect(configFor(raw, name))
+                                place = node.name
+                                connect(configFor(raw, node.name))
                                 on = true
                             }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(
+                            pings[node.name]?.let { "$it мс" } ?: "…",
+                            color = Cyan, fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
                 Spacer(Modifier.height(96.dp))
@@ -237,5 +264,27 @@ private fun RowScope.Stat(v: String, l: String) {
     ) {
         Text(v, color = Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Text(l, color = Dim, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun SiteParticles() {
+    val t by rememberInfiniteTransition(label = "p").animateFloat(
+        0f, 6.28f, infiniteRepeatable(tween(8000, easing = LinearEasing)), label = "a"
+    )
+    Canvas(Modifier.fillMaxSize()) {
+        val c = Offset(size.width / 2, size.height / 2)
+        val colors = listOf(Cyan, Color(0xFFE040FB), Purple)
+        val pts = (0 until 24).map { i ->
+            val a = i * 6.28f / 24 + t * 0.4f
+            val r = 50f + (i % 7) * 16f
+            Offset(c.x + cos(a) * r, c.y + sin(a) * r * 0.72f)
+        }
+        for (i in pts.indices) for (j in i + 1 until pts.size) {
+            if (hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) < 90f) {
+                drawLine(colors[i % 3].copy(alpha = .18f), pts[i], pts[j], strokeWidth = 1f)
+            }
+        }
+        pts.forEachIndexed { i, pt -> drawCircle(colors[i % 3].copy(alpha = .7f), 3f, pt) }
     }
 }

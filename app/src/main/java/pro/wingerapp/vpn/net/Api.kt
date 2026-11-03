@@ -44,7 +44,7 @@ object Api {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             // Remnawave отдаёт готовый sing-box JSON только клиентам sfa/singbox.
-            setRequestProperty("User-Agent", "sfa/1.11.0")
+            setRequestProperty("User-Agent", "sfa/1.11.0 Winger/1.0")
             setRequestProperty("x-hwid", hwid)
             setRequestProperty("x-device-os", "Android")
             connectTimeout = 15000
