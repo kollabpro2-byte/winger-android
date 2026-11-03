@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -38,7 +40,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 val cmd = CommandServer(this, this)
                 cmd.start()
                 server = cmd
-                cmd.startOrReloadService(config, OverrideOptions())
+                cmd.startOrReloadService(prepareConfig(config), OverrideOptions())
             } catch (e: Exception) {
                 Log.e(TAG, "start failed", e)
                 stop()
@@ -113,7 +115,9 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun cancelNotification(identifier: String?, typeID: Int) {}
     override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int) =
         throw UnsupportedOperationException()
-    override fun startDefaultInterfaceMonitor(listener: io.nekohasekai.libbox.InterfaceUpdateListener?) {}
+    override fun startDefaultInterfaceMonitor(listener: io.nekohasekai.libbox.InterfaceUpdateListener?) {
+        reportDefault(listener)
+    }
     override fun closeDefaultInterfaceMonitor(listener: io.nekohasekai.libbox.InterfaceUpdateListener?) {}
     override fun startNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener?) {}
     override fun closeNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener?) {}
@@ -125,6 +129,38 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions?) = throw UnsupportedOperationException()
     override fun createAutoRedirect(options: ByteArray?, handler: io.nekohasekai.libbox.AutoRedirectHandler?) =
         throw UnsupportedOperationException()
+
+
+    private fun prepareConfig(raw: String): String {
+        val root = org.json.JSONObject(raw)
+        val inbounds = root.optJSONArray("inbounds")
+        if (inbounds != null) {
+            val keep = org.json.JSONArray()
+            for (i in 0 until inbounds.length()) {
+                val ib = inbounds.getJSONObject(i)
+                if (ib.optString("type") == "tun") {
+                    ib.remove("interface_name")
+                    ib.put("auto_route", true)
+                    ib.put("strict_route", false)
+                    keep.put(ib)
+                }
+            }
+            root.put("inbounds", keep)
+        }
+        return root.toString()
+    }
+
+    private fun reportDefault(listener: io.nekohasekai.libbox.InterfaceUpdateListener?) {
+        if (listener == null) return
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val net = cm.activeNetwork
+        val lp = net?.let { cm.getLinkProperties(it) }
+        val name = lp?.interfaceName.orEmpty()
+        val index = runCatching {
+            java.net.NetworkInterface.getByName(name)?.index ?: -1
+        }.getOrDefault(-1)
+        listener.updateDefaultInterface(name, index, false, false)
+    }
 
     companion object {
         const val EXTRA_CONFIG = "config"
