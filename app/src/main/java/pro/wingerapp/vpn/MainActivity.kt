@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -197,17 +198,17 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
         if (tab == 0) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                 Text(
-                    if (on) place else "Нажми на орла",
-                    color = if (on) Color(0xFFE9D5FF) else Muted,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                    fontSize = 16.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 28.dp)
+                    if (on) "Выключить" else "Включить",
+                    color = if (on) Color(0xFFC084FC) else Cyan,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 22.dp)
                 )
-                Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(190.dp), contentAlignment = Alignment.Center) {
                     if (on) SiteParticles()
                     Image(
                         painterResource(R.drawable.eagle), "Winger",
-                        modifier = Modifier.size(250.dp).alpha(if (on) 1f else 0.45f).clickable {
+                        modifier = Modifier.size(168.dp).alpha(if (on) 1f else 0.55f).clickable {
                             if (on) { disconnect(); on = false; return@clickable }
                             if (raw.isBlank() || place.isBlank()) return@clickable
                             connect(xrayConfigFor(raw, place, ignoreGeo))
@@ -236,17 +237,17 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                     Stat(if ((sub?.devices ?: 0) <= 0) "безлимит" else sub!!.devices.toString(), "устройства")
                 }
                 Box(
-                    Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(16.dp))
-                        .background(Purple.copy(.28f)).border(1.dp, Purple.copy(.6f), RoundedCornerShape(16.dp))
+                    Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(28.dp))
+                        .background(Brush.horizontalGradient(listOf(Color(0xFF22D3EE), Color(0xFFA855F7))))
                         .clickable(enabled = servers.isNotEmpty() && !pinging) {
                             pinging = true
                             scope.launch {
                                 pings = withContext(Dispatchers.IO) { servers.associate { it.name to tcpPing(it.host, it.port) } }
                                 pinging = false
                             }
-                        }.padding(vertical = 12.dp),
+                        }.padding(vertical = 14.dp),
                     contentAlignment = Alignment.Center
-                ) { Text(if (pinging) "Проверяем…" else "Проверить пинг", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                ) { Text(if (pinging) "Проверяем…" else "Проверить пинг", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp) }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
                 servers.forEach { node ->
