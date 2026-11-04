@@ -36,15 +36,17 @@ object Api {
             name = o.optJSONObject("plan")?.optString("name") ?: "Подписка",
             expires = o.optString("expiresAt", ""),
             url = o.optString("url", ""),
-            devices = o.optInt("deviceLimit", 4)
+            devices = o.optInt("deviceLimit", 0)
         )
     }
 
-    fun fetchConfig(url: String, hwid: String): String {
+    fun fetchConfig(url: String, hwid: String): String = getSub(url, hwid, "sfa/1.11.0 Winger/1.0")
+    fun fetchHapp(url: String, hwid: String): String = getSub(url, hwid, "Happ/4.8.0/Android")
+
+    private fun getSub(url: String, hwid: String, ua: String): String {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            // Remnawave отдаёт готовый sing-box JSON только клиентам sfa/singbox.
-            setRequestProperty("User-Agent", "sfa/1.11.0 Winger/1.0")
+            setRequestProperty("User-Agent", ua)
             setRequestProperty("x-hwid", hwid)
             setRequestProperty("x-device-os", "Android")
             connectTimeout = 15000

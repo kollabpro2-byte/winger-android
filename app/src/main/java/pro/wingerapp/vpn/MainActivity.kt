@@ -162,7 +162,9 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 val s = Api.subscription()
                 sub = s
                 if (s != null && s.url.isNotBlank()) {
-                    val cfg = readSubConfig(Api.fetchConfig(s.url, hwid))
+                    val box = Api.fetchConfig(s.url, hwid)
+                    val happ = runCatching { Api.fetchHapp(s.url, hwid) }.getOrDefault("[]")
+                    val cfg = readSubConfig(mergeBypass(box, happ))
                     raw = cfg.raw
                     servers = cfg.servers
                     place = cfg.servers.first().name
@@ -211,7 +213,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Stat(if (on) "авто" else "—", "пинг")
                     Stat(if (on) "VPN" else "—", "статус")
-                    Stat((sub?.devices ?: 4).toString(), "устройства")
+                    Stat(if ((sub?.devices ?: 0) <= 0) "безлимит" else sub!!.devices.toString(), "устройства")
                 }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
