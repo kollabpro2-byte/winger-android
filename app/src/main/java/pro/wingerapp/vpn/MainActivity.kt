@@ -93,11 +93,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun App(ctx: Context, hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var authed by remember { mutableStateOf(false) }
-    if (!authed) Login(ctx) { authed = true } else Home(hwid, connect, disconnect)
+    if (!authed) Login(ctx, disconnect) { authed = true } else Home(hwid, connect, disconnect)
 }
 
 @Composable
-fun Login(ctx: Context, onOk: () -> Unit) {
+fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
     var user by remember { mutableStateOf(Store.login(ctx)) }
     var pass by remember { mutableStateOf(Store.password(ctx)) }
     var err by remember { mutableStateOf<String?>(null) }
@@ -138,6 +138,14 @@ fun Login(ctx: Context, onOk: () -> Unit) {
                 }.padding(14.dp),
             contentAlignment = Alignment.Center
         ) { Text(if (busy) "Входим…" else "Войти", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        if (Store.running(ctx)) {
+            Box(
+                Modifier.fillMaxWidth().padding(top = 10.dp).clip(RoundedCornerShape(16.dp))
+                    .background(Elev).border(1.dp, Purple.copy(.6f), RoundedCornerShape(16.dp))
+                    .clickable { disconnect() }.padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Выключить VPN", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
 

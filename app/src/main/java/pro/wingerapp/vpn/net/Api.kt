@@ -82,6 +82,9 @@ object Api {
             requestMethod = method
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
+            setRequestProperty("Origin", "https://my.wingerapp.pro")
+            setRequestProperty("Referer", "https://my.wingerapp.pro/")
+            setRequestProperty("User-Agent", "Mozilla/5.0 WingerAndroid")
             instanceFollowRedirects = false
             connectTimeout = 15000
             readTimeout = 20000
