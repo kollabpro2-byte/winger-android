@@ -43,7 +43,14 @@ fun xrayConfigFor(raw: String, server: String): String {
     else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
     val next = JSONArray().put(rule)
     for (i in 0 until rules.length()) next.put(rules.get(i))
-    routing.put("rules", next)
+    val clean = JSONArray()
+    for (i in 0 until next.length()) {
+        val r = next.optJSONObject(i) ?: continue
+        val text = r.toString()
+        if ("geosite:" in text || "geoip:" in text) continue
+        clean.put(r)
+    }
+    routing.put("rules", clean)
     return cfg.toString()
 }
 
