@@ -51,12 +51,30 @@ object Api {
         val (code, text) = get("$BASE/subscription")
         if (code != 200 || text.isBlank() || text == "null") return null
         val o = JSONObject(text)
+        val usedRaw = o.optDouble("trafficUsed", o.optDouble("usedTraffic", 0.0))
+        val limitRaw = o.optDouble("trafficLimit", o.optDouble("trafficLimitGb", 0.0))
+        fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
         return Sub(
             name = o.optJSONObject("plan")?.optString("name") ?: "Подписка",
             expires = o.optString("expiresAt", ""),
             url = o.optString("url", ""),
-            devices = o.optInt("deviceLimit", 0)
+            devices = o.optInt("deviceLimit", 0),
+            devicesUsed = devicesCount(),
+            trafficUsedGb = gb(usedRaw),
+            trafficLimitGb = gb(limitRaw),
+            unlimitedTraffic = o.optBoolean("unlimitedTraffic", limitRaw == 0.0)
         )
+    }
+
+    fun devicesCount(): Int {
+        val (code, text) = get("$BASE/devices")
+        if (code != 200 || text.isBlank()) return 0
+        return runCatching {
+            val t = text.trim()
+            if (t.startsWith("[")) org.json.JSONArray(t).length()
+            else org.json.JSONObject(t).optJSONArray("devices")?.length()
+                ?: org.json.JSONObject(t).optJSONArray("items")?.length() ?: 0
+        }.getOrDefault(0)
     }
 
     fun fetchConfig(url: String, hwid: String): String = getSub(url, hwid, "sfa/1.11.0 Winger/1.0")
@@ -127,4 +145,4 @@ object Api {
     }
 }
 
-data class Sub(val name: String, val expires: String, val url: String, val devices: Int)
+data class Sub(val name: String, val expires: String, val url: String, val devices: Int, val devicesUsed: Int = 0, val trafficUsedGb: Double = 0.0, val trafficLimitGb: Double = 0.0, val unlimitedTraffic: Boolean = true)

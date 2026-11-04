@@ -107,100 +107,62 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
     var err by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) {
-        if (user.isBlank() || pass.isBlank()) return@LaunchedEffect
-        busy = true
-        val e = withContext(Dispatchers.IO) {
-            runCatching {
-                if (Api.subscription() != null) return@runCatching null
-                Api.login(user, pass)
-            }.getOrElse { it.message ?: "нет сети" }
-        }
-        busy = false
-        if (e == null) onOk() else err = e
-    }
-    Column(
-        Modifier.fillMaxSize().background(Bg).padding(24.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Winger", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text("Вход в аккаунт", color = Muted, modifier = Modifier.padding(bottom = 20.dp))
-        Field(user, "Логин") { user = it }
-        Spacer(Modifier.height(10.dp))
-        Field(pass, "Пароль", true) { pass = it }
-        err?.let { Text(it, color = Color(0xFFF87171), modifier = Modifier.padding(top = 8.dp)) }
-        Spacer(Modifier.height(18.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                .background(Purple).clickable(enabled = !busy) {
-                    busy = true; err = null
-                    scope.launch {
-                        val e = withContext(Dispatchers.IO) { runCatching { Api.login(user, pass) }.getOrElse { it.message } }
-                        busy = false
-                        if (e == null) { Store.save(ctx, user, pass); onOk() } else err = e
+    fun reload(ping: Boolean) {
+        scope.launch {
+            if (ping) pinging = true else refreshing = true
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val s = Api.subscription()
+                    sub = s
+                    if (s != null && s.url.isNotBlank()) {
+                        val cfg = readHapp(Api.fetchHapp(s.url, hwid))
+                        raw = cfg.raw
+                        servers = cfg.servers
+                        if (place.isBlank()) place = cfg.servers.first().name
+                        if (ping) pings = cfg.servers.associate { it.name to tcpPing(it.host, it.port) }
                     }
-                }.padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) { Text(if (busy) "Входим…" else "Войти", color = Color.White, fontWeight = FontWeight.SemiBold) }
-        if (Store.running(ctx)) {
-            Box(
-                Modifier.fillMaxWidth().padding(top = 10.dp).clip(RoundedCornerShape(16.dp))
-                    .background(Elev).border(1.dp, Purple.copy(.6f), RoundedCornerShape(16.dp))
-                    .clickable { disconnect() }.padding(14.dp),
-                contentAlignment = Alignment.Center
-            ) { Text("Выключить VPN", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                }.onFailure { err = it.message }
+            }
+            pinging = false
+            refreshing = false
         }
     }
-}
 
-@Composable
-fun Field(v: String, label: String, password: Boolean = false, on: (String) -> Unit) {
-    OutlinedTextField(
-        v, on, label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        colors = TextFieldDefaults.colors(
-            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            focusedContainerColor = Elev, unfocusedContainerColor = Elev,
-            focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line
-        )
-    )
-}
-
-@Composable
-fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
-    val ctx = LocalContext.current
-    var tab by remember { mutableIntStateOf(0) }
-    var on by remember { mutableStateOf(Store.running(ctx)) }
-    var pinging by remember { mutableStateOf(false) }
-    var sub by remember { mutableStateOf<Sub?>(null) }
-    var raw by remember { mutableStateOf("") }
-    var servers by remember { mutableStateOf(listOf<ServerNode>()) }
-    var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
-    var ignoreGeo by remember { mutableStateOf(false) }
-    var place by remember { mutableStateOf("") }
-    var err by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-
+    LaunchedEffect(Unit) { reload(true) }
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val s = Api.subscription()
-                sub = s
-                if (s != null && s.url.isNotBlank()) {
-                    val cfg = readHapp(Api.fetchHapp(s.url, hwid))
-                    raw = cfg.raw
-                    servers = cfg.servers
-                    place = cfg.servers.first().name
-                    pings = cfg.servers.associate { it.name to tcpPing(it.host, it.port) }
-                }
-            }.onFailure { err = it.message }
+        while (true) {
+            kotlinx.coroutines.delay(60 * 60 * 1000L)
+            reload(false)
+        }
+    }
+    LaunchedEffect(on) {
+        if (!on) return@LaunchedEffect
+        val startAt = System.currentTimeMillis()
+        while (on) {
+            val sec = ((System.currentTimeMillis() - startAt) / 1000).toInt()
+            elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
+            kotlinx.coroutines.delay(1000)
         }
     }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         if (tab == 0) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
+                Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
+                    Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+                    Text(" v0.1.16", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+                }
+                if (on) Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("↑ —", color = Color(0xFF7EE0B0), fontSize = 14.sp)
+                    Text(elapsed, color = Muted, fontSize = 14.sp)
+                    Text("↓ —", color = Color(0xFF9ECBFF), fontSize = 14.sp)
+                } else Spacer(Modifier.height(22.dp))
+                if (!on) Text(
+                    "нажмите на орла для подключения",
+                    color = Color(0xFFC5D0DC), fontSize = 16.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                     if (on) SiteParticles()
                     Box(
                         Modifier.size(168.dp).shadow(10.dp, CircleShape).clip(CircleShape)
@@ -215,64 +177,56 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Image(
-                            painterResource(R.drawable.eagle), "Winger",
-                            modifier = Modifier.size(112.dp).alpha(if (on) 1f else 0.5f),
-                            contentScale = ContentScale.Fit
-                        )
+                        Image(painterResource(R.drawable.eagle), "Winger", Modifier.size(112.dp).alpha(if (on) 1f else 0.5f), contentScale = ContentScale.Fit)
                     }
                 }
                 Text(
                     buildAnnotatedString {
                         withStyle(SpanStyle(color = Color(0xFFC4B5FD))) { append("Тариф ") }
-                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) {
-                            append(sub?.name ?: "…")
-                        }
+                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) { append(sub?.name ?: "…") }
                         withStyle(SpanStyle(color = Muted)) { append(" · осталось ") }
                         withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) { append(daysLeft(sub?.expires)) }
                     },
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 13.sp
                 )
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center) {
+                    Text("Устройства ", color = Muted, fontSize = 12.sp)
+                    Text("${sub?.devicesUsed ?: 0} из ${if ((sub?.devices ?: 0) <= 0) "∞" else sub!!.devices}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("    Трафик ", color = Muted, fontSize = 12.sp)
+                    Text(trafficText(sub), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
                 err?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
-                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Stat(if ((sub?.devices ?: 0) <= 0) "безлимит" else sub!!.devices.toString(), "устройства")
-                    Stat(if (on) "VPN" else "—", "статус")
-                    Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                            .background(Brush.verticalGradient(listOf(Color(0xFF3A6D8C), Color(0xFF1B3D56))))
-                            .border(1.dp, Color(0xFF2A4A66), RoundedCornerShape(16.dp))
-                            .clickable(enabled = servers.isNotEmpty() && !pinging) {
-                                pinging = true
-                                scope.launch {
-                                    pings = withContext(Dispatchers.IO) { servers.associate { it.name to tcpPing(it.host, it.port) } }
-                                    pinging = false
-                                }
-                            }.padding(vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("пинг", color = Color(0xFFD7F3FB), fontSize = 11.sp)
-                        if (pinging) CircularProgressIndicator(Modifier.padding(top = 6.dp).size(14.dp), strokeWidth = 2.dp, color = Cyan)
-                        else Spacer(Modifier.padding(top = 6.dp).size(14.dp).clip(CircleShape).border(2.dp, Cyan.copy(.5f), CircleShape))
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                    Box(Modifier.size(32.dp).clip(CircleShape).background(Elev).border(1.dp, Color(0xFF2A4A66), CircleShape).clickable { reload(false) }, contentAlignment = Alignment.Center) {
+                        if (refreshing) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Cyan)
+                        else Text("⟳", color = Color(0xFFC9D7E4), fontSize = 16.sp)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.size(32.dp).clip(CircleShape).background(Elev).border(1.dp, Color(0xFF2A4A66), CircleShape).clickable(enabled = !pinging) { reload(true) }, contentAlignment = Alignment.Center) {
+                        Text("⚡", color = Color(0xFFC9D7E4), fontSize = 14.sp)
                     }
                 }
-                Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
                 servers.forEach { node ->
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(16.dp)).background(Elev)
-                            .border(1.dp, if (place == node.name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
-                            .clickable {
-                                place = node.name
-                                connect(xrayConfigFor(raw, node.name, ignoreGeo))
-                                on = true
-                                Store.running(ctx, true)
-                            }.padding(12.dp),
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
+                            place = node.name
+                            connect(xrayConfigFor(raw, node.name, ignoreGeo))
+                            on = true
+                            Store.running(ctx, true)
+                        }.padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Column(Modifier.weight(1f)) {
+                            Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 11.sp)
+                        }
                         if (pinging) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
-                        else Text(pings[node.name]?.let { "$it мс" } ?: "…", color = Cyan, fontWeight = FontWeight.SemiBold)
+                        else {
+                            val ms = pings[node.name]
+                            val c = when { ms == null -> Muted; ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
+                            Text(ms?.let { "${it}ms" } ?: "…", color = c, fontSize = 11.sp)
+                        }
                     }
                 }
                 Spacer(Modifier.height(96.dp))
@@ -316,6 +270,13 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             Text("Аккаунт", color = if (tab == 1) TabOn else TabOff, modifier = Modifier.clickable { tab = 1 }.padding(12.dp))
         }
     }
+}
+
+private fun trafficText(sub: Sub?): String {
+    if (sub == null) return "—"
+    val used = "%.1f".format(sub.trafficUsedGb).replace('.', ',')
+    val total = if (sub.unlimitedTraffic || sub.trafficLimitGb <= 0) "∞" else "%.0f ГБ".format(sub.trafficLimitGb)
+    return "$used ГБ из $total"
 }
 
 private fun daysLeft(expires: String?): String {
