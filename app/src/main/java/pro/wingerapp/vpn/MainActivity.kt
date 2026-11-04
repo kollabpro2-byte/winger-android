@@ -181,7 +181,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     val scope = rememberCoroutineScope()
     fun reload(ping: Boolean) {
         scope.launch {
-            if (ping) pinging = true else refreshing = true
+            if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
             withContext(Dispatchers.IO) {
                 runCatching {
                     val s = Api.subscription()
@@ -221,7 +221,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                 Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
                     Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-                    Text(" v0.1.16", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+                    Text(" v0.1.17", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
                 }
                 if (on) Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("↑ —", color = Color(0xFF7EE0B0), fontSize = 14.sp)
@@ -233,12 +233,13 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                     Image(painterResource(R.drawable.eagle), "орёл", Modifier.size(16.dp))
                     Text(" для подключения", color = Color(0xFFC5D0DC), fontSize = 16.sp)
                 }
+                val glow by rememberInfiniteTransition(label = "lamp").animateFloat(0.35f, 1f, infiniteRepeatable(tween(1600)), label = "g")
                 Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                     if (on) SiteParticles()
                     Box(
-                        Modifier.size(168.dp).shadow(10.dp, CircleShape).clip(CircleShape)
+                        Modifier.size(168.dp).shadow(if (on) 18.dp else 8.dp, CircleShape).clip(CircleShape)
                             .background(Brush.radialGradient(if (on) listOf(Color(0xFF2A2458), Color(0xFF101A30)) else listOf(Color(0xFF1C3D58), Color(0xFF0A1628))))
-                            .border(1.dp, if (on) Purple.copy(.7f) else Color(0xFF2A5A74), CircleShape)
+                            .border(2.dp, if (on) Purple.copy(glow) else Color(0xFF2A5A74), CircleShape)
                             .clickable {
                                 if (on) { disconnect(); on = false; return@clickable }
                                 if (raw.isBlank() || place.isBlank()) return@clickable
@@ -278,25 +279,38 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                     }
                 }
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
-                servers.forEach { node ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
-                            place = node.name
-                            connect(xrayConfigFor(raw, node.name, ignoreGeo))
-                            on = true
-                            Store.running(ctx, true)
-                        }.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 11.sp)
-                        }
-                        if (pinging) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
-                        else {
-                            val ms = pings[node.name]
-                            val c = when { ms == null -> Muted; ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
-                            Text(ms?.let { "${it}ms" } ?: "…", color = c, fontSize = 11.sp)
+                Column(Modifier.alpha(if (refreshing || pinging) 0.35f else 1f)) {
+                    grouped(servers).forEach { (title, nodes) ->
+                        Text(title, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                        nodes.forEach { node ->
+                            val selected = place == node.name
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (selected) Purple.copy(.22f) else Elev)
+                                    .border(1.dp, if (selected) Purple.copy(.7f) else Line, RoundedCornerShape(14.dp))
+                                    .clickable {
+                                        place = node.name
+                                        connect(xrayConfigFor(raw, node.name, ignoreGeo))
+                                        on = true
+                                        Store.running(ctx, true)
+                                    }.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 11.sp)
+                                }
+                                if (pinging) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
+                                else {
+                                    val ms = pings[node.name]
+                                    val c = when { ms == null -> Muted; ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(Modifier.size(6.dp).clip(CircleShape).background(c))
+                                        Text(ms?.toString() ?: "—", color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -341,6 +355,14 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             Text("Аккаунт", color = if (tab == 1) TabOn else TabOff, modifier = Modifier.clickable { tab = 1 }.padding(12.dp))
         }
     }
+}
+
+private fun grouped(servers: List<ServerNode>): List<Pair<String, List<ServerNode>>> {
+    val auto = servers.filter { it.name.contains("Автопилот", true) || it.name.contains("рекоменд", true) }
+    val yt = servers.filter { it.name.contains("youtube", true) || it.name.contains("ютуб", true) }
+    val lte = servers.filter { it.name.contains("LTE", true) || it.name.contains("обход", true) }
+    val rest = servers.filter { it !in auto && it !in yt && it !in lte }
+    return listOf("Рекомендуемые" to auto, "Страны" to rest, "YouTube" to yt, "Обходы" to lte).filter { it.second.isNotEmpty() }
 }
 
 private fun trafficText(sub: Sub?): String {
