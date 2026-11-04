@@ -62,7 +62,7 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
         b.addAddress("172.19.0.1", 30)
         b.addRoute("0.0.0.0", 0)
-        b.addDnsServer("1.1.1.1")
+        b.addDnsServer("77.88.8.8")
         b.addDisallowedApplication(packageName)
         val cm = getSystemService(ConnectivityManager::class.java)
         cm.activeNetwork?.let { if (Build.VERSION.SDK_INT >= 22) b.setUnderlyingNetworks(arrayOf(it)) }

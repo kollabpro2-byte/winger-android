@@ -34,12 +34,13 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false): Stri
         .put("tag", "tun")
         .put("protocol", "tun")
         .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
-        .put("sniffing", JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
+        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
     val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
     routing.put("domainStrategy", "IPIfNonMatch")
     val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
     mapKnown(cfg)
-    routing.put("rules", if (ignoreGeo) withoutGeo(rules) else rules)
+    val routed = if (ignoreGeo) withoutGeo(rules) else withRussianDirect(rules)
+    routing.put("rules", routed)
     if (ignoreGeo) {
         val target = routing.optJSONArray("balancers")?.optJSONObject(0)?.optString("tag")
         val rule = JSONObject().put("type", "field").put("inboundTag", JSONArray().put("tun"))
@@ -49,6 +50,16 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false): Stri
         stripGeo(cfg)
     }
     return cfg.toString()
+}
+
+private fun withRussianDirect(rules: JSONArray): JSONArray {
+    val domains = JSONObject().put("type", "field").put("outboundTag", "direct").put("domain", JSONArray()
+        .put("domain:ozon.ru").put("domain:ozon.com").put("domain:ozon.by").put("domain:ozon.kz")
+        .put("domain:wildberries.ru").put("domain:wb.ru").put("geosite:category-ru"))
+    val ips = JSONObject().put("type", "field").put("outboundTag", "direct").put("ip", JSONArray().put("geoip:ru"))
+    val next = JSONArray().put(domains).put(ips)
+    for (i in 0 until rules.length()) next.put(rules.get(i))
+    return next
 }
 
 private val geoMap = mapOf(
