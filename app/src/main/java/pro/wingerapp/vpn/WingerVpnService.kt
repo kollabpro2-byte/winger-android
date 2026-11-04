@@ -77,7 +77,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun usePlatformAutoDetectInterfaceControl() = true
-    override fun autoDetectInterfaceControl(fd: Int) { protect(fd) }
+    override fun autoDetectInterfaceControl(fd: Int) { protect(fd); VpnLog.add("protect $fd") }
     override fun underNetworkExtension() = false
     override fun includeAllNetworks() = false
     override fun usePlatformShell() = false
@@ -100,20 +100,21 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val v4 = options.inet4Address
         while (v4.hasNext()) { val a = v4.next(); b.addAddress(a.address(), a.prefix()); has4 = true }
         if (!has4) b.addAddress("172.19.0.1", 30)
+        var has6 = false
         val v6 = options.inet6Address
-        while (v6.hasNext()) { val a = v6.next(); b.addAddress(a.address(), a.prefix()) }
+        while (v6.hasNext()) { val a = v6.next(); b.addAddress(a.address(), a.prefix()); has6 = true }
         val dns = options.dnsServerAddress
         var dnsN = 0
         while (dns.hasNext()) { b.addDnsServer(dns.next()); dnsN++ }
         if (dnsN == 0) b.addDnsServer("1.1.1.1")
         b.addRoute("0.0.0.0", 0)
-        b.addRoute("::", 0)
+        if (has6) b.addRoute("::", 0)
         b.addDisallowedApplication(packageName)
         val cm = getSystemService(ConnectivityManager::class.java)
         cm.activeNetwork?.let { if (Build.VERSION.SDK_INT >= 22) b.setUnderlyingNetworks(arrayOf(it)) }
         tun?.close()
         tun = b.establish() ?: error("tun не поднялся")
-        VpnLog.add("tun fd=${tun!!.fd} dns=$dnsN")
+        VpnLog.add("tun fd=${tun!!.fd} dns=$dnsN v6=$has6")
         return tun!!.fd
     }
 
