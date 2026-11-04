@@ -1,5 +1,7 @@
 package pro.wingerapp.vpn
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
@@ -239,10 +241,23 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 Spacer(Modifier.height(96.dp))
             }
         } else {
-            Column(Modifier.fillMaxSize().padding(20.dp)) {
+            val ctx = LocalContext.current
+            var log by remember { mutableStateOf(VpnLog.text()) }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
                 Text("Аккаунт", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 24.dp))
                 Text(sub?.name ?: "Подписка", color = Muted)
                 Text("до ${sub?.expires?.take(10) ?: "—"}", color = Muted)
+                Text("Лог подключения", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 20.dp))
+                Text(log.ifBlank { "пока пусто" }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Elev).clickable { log = VpnLog.text() }.padding(10.dp)) {
+                        Text("Обновить", color = Color.White)
+                    }
+                    Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
+                        ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
+                    }.padding(10.dp)) { Text("Скопировать", color = Color.White) }
+                }
+                Spacer(Modifier.height(96.dp))
             }
         }
         Row(

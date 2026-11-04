@@ -28,10 +28,14 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private var server: CommandServer? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        VpnLog.init(this)
+        if (intent?.action == "STOP") { VpnLog.add("stop"); stopSelf(); return START_NOT_STICKY }
         startForeground(1, note())
-        val config = intent?.getStringExtra(EXTRA_CONFIG) ?: return stop()
+        val config = intent?.getStringExtra(EXTRA_CONFIG)
+        if (config.isNullOrBlank()) { VpnLog.add("нет конфига"); return stop() }
         Thread {
             try {
+                VpnLog.add("старт, конфиг ${config.length} байт")
                 Libbox.setup(SetupOptions().apply {
                     basePath = filesDir.absolutePath
                     workingPath = filesDir.absolutePath
@@ -41,7 +45,9 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 cmd.start()
                 server = cmd
                 cmd.startOrReloadService(prepareConfig(config), OverrideOptions())
+                VpnLog.add("ядро запущено")
             } catch (e: Exception) {
+                VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
                 Log.e(TAG, "start failed", e)
                 stop()
             }
@@ -86,20 +92,28 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun readSystemSSHHostKey() = ""
 
     override fun openTun(options: TunOptions): Int {
+        VpnLog.add("openTun mtu=${options.mtu}")
         if (prepare(this) != null) error("нет разрешения VPN")
         val b = Builder().setSession("Winger").setMtu(options.mtu)
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
+        var has4 = false
         val v4 = options.inet4Address
-        while (v4.hasNext()) {
-            val a = v4.next()
-            b.addAddress(a.address(), a.prefix())
-        }
-        if (!options.inet4Address.hasNext()) b.addAddress("172.19.0.1", 30)
+        while (v4.hasNext()) { val a = v4.next(); b.addAddress(a.address(), a.prefix()); has4 = true }
+        if (!has4) b.addAddress("172.19.0.1", 30)
+        val v6 = options.inet6Address
+        while (v6.hasNext()) { val a = v6.next(); b.addAddress(a.address(), a.prefix()) }
+        val dns = options.dnsServerAddress
+        var dnsN = 0
+        while (dns.hasNext()) { b.addDnsServer(dns.next()); dnsN++ }
+        if (dnsN == 0) b.addDnsServer("1.1.1.1")
         b.addRoute("0.0.0.0", 0)
-        b.addDnsServer("1.1.1.1")
+        b.addRoute("::", 0)
         b.addDisallowedApplication(packageName)
+        val cm = getSystemService(ConnectivityManager::class.java)
+        cm.activeNetwork?.let { if (Build.VERSION.SDK_INT >= 22) b.setUnderlyingNetworks(arrayOf(it)) }
         tun?.close()
         tun = b.establish() ?: error("tun не поднялся")
+        VpnLog.add("tun fd=${tun!!.fd} dns=$dnsN")
         return tun!!.fd
     }
 
@@ -159,6 +173,7 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val index = runCatching {
             java.net.NetworkInterface.getByName(name)?.index ?: -1
         }.getOrDefault(-1)
+        VpnLog.add("интерфейс $name #$index")
         listener.updateDefaultInterface(name, index, false, false)
     }
 
