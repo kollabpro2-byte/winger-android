@@ -43,9 +43,38 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = true): Strin
     else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
     val next = JSONArray().put(rule)
     for (i in 0 until rules.length()) next.put(rules.get(i))
+    mapKnown(cfg)
     routing.put("rules", if (ignoreGeo) withoutGeo(next) else next)
     if (ignoreGeo) stripGeo(cfg)
     return cfg.toString()
+}
+
+private val geoMap = mapOf(
+    "geosite:torrent" to "geosite:category-public-tracker",
+    "geosite:whitelist" to "geosite:category-ru",
+    "geosite:category-geoblock-ru" to "geosite:category-ru",
+    "geosite:twitch-ads" to "geosite:category-ads"
+)
+
+private fun mapKnown(node: Any?) {
+    when (node) {
+        is JSONObject -> node.keys().asSequence().toList().forEach { k ->
+            val v = node.opt(k)
+            if (v is String) node.put(k, swap(v)) else mapKnown(v)
+        }
+        is JSONArray -> for (i in 0 until node.length()) {
+            when (val v = node.opt(i)) {
+                is String -> node.put(i, swap(v))
+                else -> mapKnown(v)
+            }
+        }
+    }
+}
+
+private fun swap(s: String): String {
+    var out = s
+    geoMap.forEach { (a, b) -> out = out.replace(a, b) }
+    return out
 }
 
 private fun withoutGeo(rules: JSONArray): JSONArray {

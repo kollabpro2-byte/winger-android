@@ -66,11 +66,16 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
     }
 
     private fun prepareAssets() {
+        val stamp = File(filesDir, "geo.version")
+        val version = "3"
+        val fresh = stamp.takeIf { it.exists() }?.readText() != version
         for (name in listOf("geoip.dat", "geosite.dat")) {
             val out = File(filesDir, name)
-            if (out.exists()) continue
+            if (out.exists() && !fresh) continue
             assets.open(name).use { input -> out.outputStream().use { input.copyTo(it) } }
+            VpnLog.add("$name ${out.length()} байт")
         }
+        stamp.writeText(version)
     }
 
     private fun note(): Notification {
