@@ -107,6 +107,78 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
     var err by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (user.isBlank() || pass.isBlank()) return@LaunchedEffect
+        busy = true
+        val e = withContext(Dispatchers.IO) {
+            runCatching {
+                if (Api.subscription() != null) return@runCatching null
+                Api.login(user, pass)
+            }.getOrElse { it.message ?: "нет сети" }
+        }
+        busy = false
+        if (e == null) onOk() else err = e
+    }
+    Column(Modifier.fillMaxSize().background(Bg).padding(24.dp), verticalArrangement = Arrangement.Center) {
+        Text("Winger", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text("Вход в аккаунт", color = Muted, modifier = Modifier.padding(bottom = 20.dp))
+        Field(user, "Логин") { user = it }
+        Spacer(Modifier.height(10.dp))
+        Field(pass, "Пароль", true) { pass = it }
+        err?.let { Text(it, color = Color(0xFFF87171), modifier = Modifier.padding(top = 8.dp)) }
+        Spacer(Modifier.height(18.dp))
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
+                .clickable(enabled = !busy) {
+                    busy = true; err = null
+                    scope.launch {
+                        val e = withContext(Dispatchers.IO) { runCatching { Api.login(user, pass) }.getOrElse { it.message } }
+                        busy = false
+                        if (e == null) { Store.save(ctx, user, pass); onOk() } else err = e
+                    }
+                }.padding(14.dp),
+            contentAlignment = Alignment.Center
+        ) { Text(if (busy) "Входим…" else "Войти", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        if (Store.running(ctx)) {
+            Box(
+                Modifier.fillMaxWidth().padding(top = 10.dp).clip(RoundedCornerShape(16.dp))
+                    .background(Elev).border(1.dp, Purple.copy(.6f), RoundedCornerShape(16.dp))
+                    .clickable { disconnect() }.padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Выключить VPN", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        }
+    }
+}
+
+@Composable
+fun Field(v: String, label: String, password: Boolean = false, on: (String) -> Unit) {
+    OutlinedTextField(
+        v, on, label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        colors = TextFieldDefaults.colors(
+            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+            focusedContainerColor = Elev, unfocusedContainerColor = Elev,
+            focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line
+        )
+    )
+}
+
+@Composable
+fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
+    val ctx = LocalContext.current
+    var tab by remember { mutableIntStateOf(0) }
+    var on by remember { mutableStateOf(Store.running(ctx)) }
+    var pinging by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
+    var elapsed by remember { mutableStateOf("00:00:00") }
+    var sub by remember { mutableStateOf<Sub?>(null) }
+    var raw by remember { mutableStateOf("") }
+    var servers by remember { mutableStateOf(listOf<ServerNode>()) }
+    var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
+    var ignoreGeo by remember { mutableStateOf(false) }
+    var place by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     fun reload(ping: Boolean) {
         scope.launch {
             if (ping) pinging = true else refreshing = true
@@ -127,7 +199,6 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
             refreshing = false
         }
     }
-
     LaunchedEffect(Unit) { reload(true) }
     LaunchedEffect(Unit) {
         while (true) {
