@@ -157,11 +157,11 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
                     Text(elapsed, color = Muted, fontSize = 14.sp)
                     Text("↓ —", color = Color(0xFF9ECBFF), fontSize = 14.sp)
                 } else Spacer(Modifier.height(22.dp))
-                if (!on) Text(
-                    "нажмите на орла для подключения",
-                    color = Color(0xFFC5D0DC), fontSize = 16.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                )
+                if (!on) Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Text("нажмите на ", color = Color(0xFFC5D0DC), fontSize = 16.sp)
+                    Image(painterResource(R.drawable.eagle), "орёл", Modifier.size(16.dp))
+                    Text(" для подключения", color = Color(0xFFC5D0DC), fontSize = 16.sp)
+                }
                 Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                     if (on) SiteParticles()
                     Box(
