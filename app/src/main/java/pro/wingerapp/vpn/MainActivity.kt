@@ -77,19 +77,23 @@ class MainActivity : ComponentActivity() {
         if (prep != null) vpnPerm.launch(prep)
         else startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_CONFIG, config))
     }
-    fun disconnect() { startService(Intent(this, WingerVpnService::class.java).setAction("STOP")) }
+    fun disconnect() {
+        Store.running(this, false)
+        startService(Intent(this, WingerVpnService::class.java).setAction("STOP"))
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { App(this, hwid(), ::connect) }
+        pro.wingerapp.vpn.net.Api.init(this)
+        setContent { App(this, hwid(), ::connect, ::disconnect) }
     }
     private fun hwid() = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         ?.padEnd(16, '0')?.take(32) ?: "winger-android-device"
 }
 
 @Composable
-fun App(ctx: Context, hwid: String, connect: (String) -> Unit) {
+fun App(ctx: Context, hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var authed by remember { mutableStateOf(false) }
-    if (!authed) Login(ctx) { authed = true } else Home(hwid, connect)
+    if (!authed) Login(ctx) { authed = true } else Home(hwid, connect, disconnect)
 }
 
 @Composable
@@ -100,12 +104,16 @@ fun Login(ctx: Context, onOk: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        if (user.isNotBlank() && pass.isNotBlank()) {
-            busy = true
-            val e = withContext(Dispatchers.IO) { runCatching { Api.login(user, pass) }.getOrElse { it.message } }
-            busy = false
-            if (e == null) onOk() else err = e
+        if (user.isBlank() || pass.isBlank()) return@LaunchedEffect
+        busy = true
+        val e = withContext(Dispatchers.IO) {
+            runCatching {
+                if (Api.subscription() != null) return@runCatching null
+                Api.login(user, pass)
+            }.getOrElse { it.message ?: "нет сети" }
         }
+        busy = false
+        if (e == null) onOk() else err = e
     }
     Column(
         Modifier.fillMaxSize().background(Bg).padding(24.dp),
@@ -147,9 +155,10 @@ fun Field(v: String, label: String, password: Boolean = false, on: (String) -> U
 }
 
 @Composable
-fun Home(hwid: String, connect: (String) -> Unit) {
+fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
-    var on by remember { mutableStateOf(false) }
+    var on by remember { mutableStateOf(Store.running(LocalContext.current)) }
+    var pinging by remember { mutableStateOf(false) }
     var sub by remember { mutableStateOf<Sub?>(null) }
     var raw by remember { mutableStateOf("") }
     var servers by remember { mutableStateOf(listOf<ServerNode>()) }
@@ -190,10 +199,11 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     Image(
                         painterResource(R.drawable.eagle), "Winger",
                         modifier = Modifier.size(250.dp).alpha(if (on) 1f else 0.45f).clickable {
+                            if (on) { disconnect(); on = false; return@clickable }
                             if (raw.isBlank() || place.isBlank()) return@clickable
-                            if (on) { on = false; return@clickable }
                             connect(xrayConfigFor(raw, place, ignoreGeo))
                             on = true
+                            Store.running(LocalContext.current, true)
                         },
                         contentScale = ContentScale.Fit
                     )
@@ -216,6 +226,18 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                     Stat(if (on) "VPN" else "—", "статус")
                     Stat(if ((sub?.devices ?: 0) <= 0) "безлимит" else sub!!.devices.toString(), "устройства")
                 }
+                Box(
+                    Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(16.dp))
+                        .background(Purple.copy(.28f)).border(1.dp, Purple.copy(.6f), RoundedCornerShape(16.dp))
+                        .clickable(enabled = servers.isNotEmpty() && !pinging) {
+                            pinging = true
+                            scope.launch {
+                                pings = withContext(Dispatchers.IO) { servers.associate { it.name to tcpPing(it.host, it.port) } }
+                                pinging = false
+                            }
+                        }.padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(if (pinging) "Проверяем…" else "Проверить пинг", color = Color.White, fontWeight = FontWeight.SemiBold) }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
                 servers.forEach { node ->
@@ -227,6 +249,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                                 place = node.name
                                 connect(xrayConfigFor(raw, node.name, ignoreGeo))
                                 on = true
+                                Store.running(LocalContext.current, true)
                             }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

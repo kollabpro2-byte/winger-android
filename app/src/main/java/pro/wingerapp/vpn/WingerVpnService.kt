@@ -19,7 +19,7 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         VpnLog.init(this)
-        if (intent?.action == "STOP") { stopCore(); stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == "STOP") { Store.running(this, false); stopCore(); stopSelf(); return START_NOT_STICKY }
         startForeground(1, note())
         val config = intent?.getStringExtra(EXTRA_CONFIG)
         if (config.isNullOrBlank()) { VpnLog.add("нет конфига"); return stop() }
@@ -32,6 +32,7 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
                 val ctl = Libv2ray.newCoreController(this)
                 core = ctl
                 ctl.startLoop(config, fd)
+                Store.running(this, true)
                 VpnLog.add("ядро запущено")
             } catch (e: Exception) {
                 VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
@@ -41,6 +42,12 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         return START_STICKY
     }
 
+    override fun onRevoke() {
+        Store.running(this, false)
+        VpnLog.add("систему забрал другой VPN")
+        stopCore()
+        stopSelf()
+    }
     override fun onDestroy() { stopCore(); stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy() }
     override fun startup(): Long = 0
     override fun shutdown(): Long = 0
