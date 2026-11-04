@@ -162,7 +162,46 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             }
             root.put("inbounds", keep)
         }
+        migrateDns(root)
         return root.toString()
+    }
+
+    private fun migrateDns(root: org.json.JSONObject) {
+        val dns = root.optJSONObject("dns") ?: return
+        val fake = dns.optJSONObject("fakeip")
+        dns.remove("fakeip")
+        dns.remove("independent_cache")
+        val servers = dns.optJSONArray("servers") ?: org.json.JSONArray().also { dns.put("servers", it) }
+        val next = org.json.JSONArray()
+        for (i in 0 until servers.length()) {
+            val s = servers.getJSONObject(i)
+            val address = s.optString("address")
+            if (address == "fakeip" || s.optString("type") == "fakeip") {
+                val n = org.json.JSONObject()
+                    .put("type", "fakeip")
+                    .put("tag", s.optString("tag", "remote"))
+                    .put("inet4_range", fake?.optString("inet4_range", "198.18.0.0/15") ?: "198.18.0.0/15")
+                    .put("inet6_range", fake?.optString("inet6_range", "fc00::/18") ?: "fc00::/18")
+                next.put(n)
+                continue
+            }
+            if (address.contains("://")) {
+                val type = address.substringBefore("://")
+                val host = address.substringAfter("://")
+                s.put("type", if (type == "tcp") "tcp" else if (type == "tls") "tls" else if (type == "https") "https" else "udp")
+                s.put("server", host)
+                s.remove("address")
+            } else if (address.isNotBlank()) {
+                s.put("type", "udp")
+                s.put("server", address)
+                s.remove("address")
+            }
+            s.remove("strategy")
+            s.remove("address_strategy")
+            next.put(s)
+        }
+        dns.put("servers", next)
+        VpnLog.add("dns migrated")
     }
 
     private fun reportDefault(listener: io.nekohasekai.libbox.InterfaceUpdateListener?) {
