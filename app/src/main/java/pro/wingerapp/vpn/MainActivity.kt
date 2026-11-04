@@ -318,7 +318,6 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     }
 }
 
-@Composable
 private fun daysLeft(expires: String?): String {
     if (expires.isNullOrBlank()) return "—"
     return runCatching {
@@ -328,6 +327,7 @@ private fun daysLeft(expires: String?): String {
     }.getOrDefault("—")
 }
 
+@Composable
 private fun RowScope.Stat(v: String, l: String) {
     Column(
         Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(Elev)
