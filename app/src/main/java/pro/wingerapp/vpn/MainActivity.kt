@@ -22,9 +22,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -197,26 +200,27 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Bg)) {
         if (tab == 0) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                Text(
-                    if (on) "Выключить" else "Включить",
-                    color = if (on) Color(0xFFC084FC) else Cyan,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 20.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 22.dp)
-                )
-                Box(Modifier.fillMaxWidth().height(190.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
                     if (on) SiteParticles()
-                    Image(
-                        painterResource(R.drawable.eagle), "Winger",
-                        modifier = Modifier.size(168.dp).alpha(if (on) 1f else 0.55f).clickable {
-                            if (on) { disconnect(); on = false; return@clickable }
-                            if (raw.isBlank() || place.isBlank()) return@clickable
-                            connect(xrayConfigFor(raw, place, ignoreGeo))
-                            on = true
-                            Store.running(ctx, true)
-                        },
-                        contentScale = ContentScale.Fit
-                    )
+                    Box(
+                        Modifier.size(168.dp).shadow(10.dp, CircleShape).clip(CircleShape)
+                            .background(Brush.radialGradient(if (on) listOf(Color(0xFF2A2458), Color(0xFF101A30)) else listOf(Color(0xFF1C3D58), Color(0xFF0A1628))))
+                            .border(1.dp, if (on) Purple.copy(.7f) else Color(0xFF2A5A74), CircleShape)
+                            .clickable {
+                                if (on) { disconnect(); on = false; return@clickable }
+                                if (raw.isBlank() || place.isBlank()) return@clickable
+                                connect(xrayConfigFor(raw, place, ignoreGeo))
+                                on = true
+                                Store.running(ctx, true)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painterResource(R.drawable.eagle), "Winger",
+                            modifier = Modifier.size(112.dp).alpha(if (on) 1f else 0.5f),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                 }
                 Text(
                     buildAnnotatedString {
@@ -224,30 +228,33 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) {
                             append(sub?.name ?: "…")
                         }
-                        withStyle(SpanStyle(color = Muted)) {
-                            append(" · " + (sub?.expires?.take(10) ?: ""))
-                        }
+                        withStyle(SpanStyle(color = Muted)) { append(" · осталось ") }
+                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.SemiBold)) { append(daysLeft(sub?.expires)) }
                     },
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 13.sp
                 )
                 err?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Stat(if (on) "авто" else "—", "пинг")
-                    Stat(if (on) "VPN" else "—", "статус")
                     Stat(if ((sub?.devices ?: 0) <= 0) "безлимит" else sub!!.devices.toString(), "устройства")
+                    Stat(if (on) "VPN" else "—", "статус")
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                            .background(Brush.verticalGradient(listOf(Color(0xFF3A6D8C), Color(0xFF1B3D56))))
+                            .border(1.dp, Color(0xFF2A4A66), RoundedCornerShape(16.dp))
+                            .clickable(enabled = servers.isNotEmpty() && !pinging) {
+                                pinging = true
+                                scope.launch {
+                                    pings = withContext(Dispatchers.IO) { servers.associate { it.name to tcpPing(it.host, it.port) } }
+                                    pinging = false
+                                }
+                            }.padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("пинг", color = Color(0xFFD7F3FB), fontSize = 11.sp)
+                        if (pinging) CircularProgressIndicator(Modifier.padding(top = 6.dp).size(14.dp), strokeWidth = 2.dp, color = Cyan)
+                        else Spacer(Modifier.padding(top = 6.dp).size(14.dp).clip(CircleShape).border(2.dp, Cyan.copy(.5f), CircleShape))
+                    }
                 }
-                Box(
-                    Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(28.dp))
-                        .background(Brush.horizontalGradient(listOf(Color(0xFF22D3EE), Color(0xFFA855F7))))
-                        .clickable(enabled = servers.isNotEmpty() && !pinging) {
-                            pinging = true
-                            scope.launch {
-                                pings = withContext(Dispatchers.IO) { servers.associate { it.name to tcpPing(it.host, it.port) } }
-                                pinging = false
-                            }
-                        }.padding(vertical = 14.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text(if (pinging) "Проверяем…" else "Проверить пинг", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp) }
                 Text("СЕРВЕРЫ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
                 servers.forEach { node ->
@@ -264,10 +271,8 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Text(
-                            pings[node.name]?.let { "$it мс" } ?: "…",
-                            color = Cyan, fontWeight = FontWeight.SemiBold
-                        )
+                        if (pinging) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
+                        else Text(pings[node.name]?.let { "$it мс" } ?: "…", color = Cyan, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 Spacer(Modifier.height(96.dp))
@@ -314,6 +319,15 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
 }
 
 @Composable
+private fun daysLeft(expires: String?): String {
+    if (expires.isNullOrBlank()) return "—"
+    return runCatching {
+        val d = java.time.LocalDate.parse(expires.take(10))
+        val n = java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
+        "$n дней"
+    }.getOrDefault("—")
+}
+
 private fun RowScope.Stat(v: String, l: String) {
     Column(
         Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(Elev)
