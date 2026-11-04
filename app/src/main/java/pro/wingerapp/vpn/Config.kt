@@ -20,7 +20,7 @@ fun readHapp(body: String): SubConfig {
     return SubConfig(body, servers)
 }
 
-fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = true): String {
+fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false): String {
     val arr = JSONArray(raw)
     var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
     for (i in 0 until arr.length()) {
@@ -36,16 +36,18 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = true): Strin
         .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
         .put("sniffing", JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
     val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
+    routing.put("domainStrategy", "IPIfNonMatch")
     val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
-    val target = routing.optJSONArray("balancers")?.optJSONObject(0)?.optString("tag")
-    val rule = JSONObject().put("type", "field").put("inboundTag", JSONArray().put("tun"))
-    if (!target.isNullOrBlank()) rule.put("balancerTag", target)
-    else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
-    val next = JSONArray().put(rule)
-    for (i in 0 until rules.length()) next.put(rules.get(i))
     mapKnown(cfg)
-    routing.put("rules", if (ignoreGeo) withoutGeo(next) else next)
-    if (ignoreGeo) stripGeo(cfg)
+    routing.put("rules", if (ignoreGeo) withoutGeo(rules) else rules)
+    if (ignoreGeo) {
+        val target = routing.optJSONArray("balancers")?.optJSONObject(0)?.optString("tag")
+        val rule = JSONObject().put("type", "field").put("inboundTag", JSONArray().put("tun"))
+        if (!target.isNullOrBlank()) rule.put("balancerTag", target)
+        else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
+        routing.put("rules", JSONArray().put(rule))
+        stripGeo(cfg)
+    }
     return cfg.toString()
 }
 

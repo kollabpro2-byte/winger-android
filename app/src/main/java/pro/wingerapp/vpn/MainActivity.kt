@@ -172,7 +172,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var raw by remember { mutableStateOf("") }
     var servers by remember { mutableStateOf(listOf<ServerNode>()) }
     var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
-    var ignoreGeo by remember { mutableStateOf(true) }
+    var ignoreGeo by remember { mutableStateOf(false) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
