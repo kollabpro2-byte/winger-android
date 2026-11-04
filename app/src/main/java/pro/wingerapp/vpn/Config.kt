@@ -20,7 +20,7 @@ fun readHapp(body: String): SubConfig {
     return SubConfig(body, servers)
 }
 
-fun xrayConfigFor(raw: String, server: String): String {
+fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = true): String {
     val arr = JSONArray(raw)
     var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
     for (i in 0 until arr.length()) {
@@ -43,16 +43,46 @@ fun xrayConfigFor(raw: String, server: String): String {
     else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
     val next = JSONArray().put(rule)
     for (i in 0 until rules.length()) next.put(rules.get(i))
-    val clean = JSONArray()
-    for (i in 0 until next.length()) {
-        val r = next.optJSONObject(i) ?: continue
-        val text = r.toString()
-        if ("geosite:" in text || "geoip:" in text) continue
-        clean.put(r)
-    }
-    routing.put("rules", clean)
+    routing.put("rules", if (ignoreGeo) withoutGeo(next) else next)
+    if (ignoreGeo) stripGeo(cfg)
     return cfg.toString()
 }
+
+private fun withoutGeo(rules: JSONArray): JSONArray {
+    val clean = JSONArray()
+    for (i in 0 until rules.length()) {
+        val r = rules.optJSONObject(i) ?: continue
+        if (hasGeo(r.toString())) continue
+        clean.put(r)
+    }
+    return clean
+}
+
+private fun stripGeo(node: Any?) {
+    when (node) {
+        is JSONObject -> {
+            val keys = node.keys().asSequence().toList()
+            for (k in keys) {
+                val v = node.opt(k)
+                if (v is String && hasGeo(v)) node.remove(k)
+                else if (v is JSONArray) {
+                    val keep = JSONArray()
+                    for (i in 0 until v.length()) {
+                        val item = v.opt(i)
+                        if (item is String && hasGeo(item)) continue
+                        if (item is JSONObject && hasGeo(item.toString())) continue
+                        keep.put(item)
+                    }
+                    node.put(k, keep)
+                    stripGeo(keep)
+                } else stripGeo(v)
+            }
+        }
+        is JSONArray -> for (i in 0 until node.length()) stripGeo(node.opt(i))
+    }
+}
+
+private fun hasGeo(text: String) = "geosite:" in text || "geoip:" in text
 
 private fun firstVless(cfg: JSONObject): JSONObject? {
     val obs = cfg.optJSONArray("outbounds") ?: return null

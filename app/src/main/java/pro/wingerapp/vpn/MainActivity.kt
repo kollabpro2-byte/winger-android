@@ -154,6 +154,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
     var raw by remember { mutableStateOf("") }
     var servers by remember { mutableStateOf(listOf<ServerNode>()) }
     var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
+    var ignoreGeo by remember { mutableStateOf(true) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -191,7 +192,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                         modifier = Modifier.size(250.dp).alpha(if (on) 1f else 0.45f).clickable {
                             if (raw.isBlank() || place.isBlank()) return@clickable
                             if (on) { on = false; return@clickable }
-                            connect(xrayConfigFor(raw, place))
+                            connect(xrayConfigFor(raw, place, ignoreGeo))
                             on = true
                         },
                         contentScale = ContentScale.Fit
@@ -224,7 +225,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                             .border(1.dp, if (place == node.name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
                             .clickable {
                                 place = node.name
-                                connect(xrayConfigFor(raw, node.name))
+                                connect(xrayConfigFor(raw, node.name, ignoreGeo))
                                 on = true
                             }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -245,6 +246,15 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 Text("Аккаунт", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 24.dp))
                 Text(sub?.name ?: "Подписка", color = Muted)
                 Text("до ${sub?.expires?.take(10) ?: "—"}", color = Muted)
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(14.dp))
+                        .background(if (ignoreGeo) Purple.copy(.35f) else Elev)
+                        .clickable { ignoreGeo = !ignoreGeo }.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(if (ignoreGeo) "Гео-базы игнорируются" else "Гео-базы включены", color = Color.White, modifier = Modifier.weight(1f))
+                    Text(if (ignoreGeo) "вкл" else "выкл", color = Cyan)
+                }
                 Text("Лог подключения", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 20.dp))
                 Text(log.ifBlank { "пока пусто" }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
