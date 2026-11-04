@@ -164,9 +164,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                 val s = Api.subscription()
                 sub = s
                 if (s != null && s.url.isNotBlank()) {
-                    val box = Api.fetchConfig(s.url, hwid)
-                    val happ = runCatching { Api.fetchHapp(s.url, hwid) }.getOrDefault("[]")
-                    val cfg = readSubConfig(mergeBypass(box, happ))
+                    val cfg = readHapp(Api.fetchHapp(s.url, hwid))
                     raw = cfg.raw
                     servers = cfg.servers
                     place = cfg.servers.first().name
@@ -193,7 +191,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                         modifier = Modifier.size(250.dp).alpha(if (on) 1f else 0.45f).clickable {
                             if (raw.isBlank() || place.isBlank()) return@clickable
                             if (on) { on = false; return@clickable }
-                            connect(configFor(raw, place))
+                            connect(xrayConfigFor(raw, place))
                             on = true
                         },
                         contentScale = ContentScale.Fit
@@ -226,7 +224,7 @@ fun Home(hwid: String, connect: (String) -> Unit) {
                             .border(1.dp, if (place == node.name) Purple.copy(.55f) else Line, RoundedCornerShape(16.dp))
                             .clickable {
                                 place = node.name
-                                connect(configFor(raw, node.name))
+                                connect(xrayConfigFor(raw, node.name))
                                 on = true
                             }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
