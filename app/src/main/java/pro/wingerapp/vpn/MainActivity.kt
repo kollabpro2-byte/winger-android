@@ -156,8 +156,9 @@ fun Field(v: String, label: String, password: Boolean = false, on: (String) -> U
 
 @Composable
 fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
+    val ctx = LocalContext.current
     var tab by remember { mutableIntStateOf(0) }
-    var on by remember { mutableStateOf(Store.running(LocalContext.current)) }
+    var on by remember { mutableStateOf(Store.running(ctx)) }
     var pinging by remember { mutableStateOf(false) }
     var sub by remember { mutableStateOf<Sub?>(null) }
     var raw by remember { mutableStateOf("") }
@@ -203,7 +204,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                             if (raw.isBlank() || place.isBlank()) return@clickable
                             connect(xrayConfigFor(raw, place, ignoreGeo))
                             on = true
-                            Store.running(LocalContext.current, true)
+                            Store.running(ctx, true)
                         },
                         contentScale = ContentScale.Fit
                     )
@@ -249,7 +250,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                                 place = node.name
                                 connect(xrayConfigFor(raw, node.name, ignoreGeo))
                                 on = true
-                                Store.running(LocalContext.current, true)
+                                Store.running(ctx, true)
                             }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
