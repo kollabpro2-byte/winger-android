@@ -163,7 +163,38 @@ class WingerVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             root.put("inbounds", keep)
         }
         migrateDns(root)
+        dropUnsupported(root)
         return root.toString()
+    }
+
+    private fun dropUnsupported(root: org.json.JSONObject) {
+        val outbounds = root.optJSONArray("outbounds") ?: return
+        val keep = org.json.JSONArray()
+        val dropped = mutableSetOf<String>()
+        for (i in 0 until outbounds.length()) {
+            val o = outbounds.getJSONObject(i)
+            val tr = o.optJSONObject("transport")?.optString("type").orEmpty()
+            if (tr == "xhttp" || tr == "splithttp") {
+                dropped += o.optString("tag")
+                continue
+            }
+            keep.put(o)
+        }
+        if (dropped.isEmpty()) return
+        root.put("outbounds", keep)
+        for (i in 0 until keep.length()) {
+            val o = keep.getJSONObject(i)
+            if (o.optString("type") != "selector") continue
+            val opts = o.optJSONArray("outbounds") ?: continue
+            val next = org.json.JSONArray()
+            for (j in 0 until opts.length()) {
+                val tag = opts.getString(j)
+                if (tag !in dropped) next.put(tag)
+            }
+            o.put("outbounds", next)
+            if (o.optString("default") in dropped && next.length() > 0) o.put("default", next.getString(0))
+        }
+        VpnLog.add("пропущены обходы без поддержки ядра: ${dropped.size}")
     }
 
     private fun migrateDns(root: org.json.JSONObject) {
