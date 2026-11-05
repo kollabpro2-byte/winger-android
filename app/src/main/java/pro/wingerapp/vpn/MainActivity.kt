@@ -267,7 +267,10 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         when (tab) {
-            0 -> HomeTab(ctx, hwid, sub, servers, pings, place, on, elapsed, pinging, refreshing, err, ignoreGeo, raw, connect, disconnect, reload,
+            0 -> HomeTab(
+                ctx = ctx, hwid = hwid, sub = sub, servers = servers, pings = pings, place = place,
+                on = on, elapsed = elapsed, pinging = pinging, refreshing = refreshing, err = err,
+                ignoreGeo = ignoreGeo, raw = raw, connect = connect, disconnect = disconnect, reload = reload,
                 onSelect = { name ->
                     place = name
                     connect(xrayConfigFor(raw, name, ignoreGeo))
