@@ -228,7 +228,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    fun reload(ping: Boolean) {
+    val reload: (Boolean) -> Unit = { ping ->
         scope.launch {
             if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
             withContext(Dispatchers.IO) {
