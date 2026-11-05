@@ -74,22 +74,80 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
     return cfg.toString()
 }
 
-fun delayConfig(raw: String, server: String): String {
+data class Endpoint(val host: String, val port: Int)
+
+fun endpointsOf(raw: String, server: String): List<Endpoint> {
+    val cfg = namedConfig(raw, server)
+    val obs = cfg.optJSONArray("outbounds") ?: return emptyList()
+    val found = mutableListOf<Endpoint>()
+    for (i in 0 until obs.length()) {
+        val outbound = obs.optJSONObject(i) ?: continue
+        val proto = outbound.optString("protocol").lowercase()
+        if (proto in setOf("freedom", "blackhole", "dns", "loopback")) continue
+        collectEndpoints(outbound.optJSONObject("settings"), found)
+    }
+    return found.distinct()
+}
+
+fun delayConfigs(raw: String, server: String): List<String> {
+    val cfg = namedConfig(raw, server)
+    val proxies = vlessOutbounds(cfg).take(4)
+    return proxies.map { proxy ->
+        val tagged = JSONObject(proxy.toString()).put("tag", "proxy")
+        JSONObject()
+            .put("outbounds", JSONArray().put(tagged).put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
+            .put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1")))
+            .put("routing", JSONObject()
+                .put("domainStrategy", "AsIs")
+                .put("rules", JSONArray().put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", "proxy"))))
+            .toString()
+    }
+}
+
+private fun namedConfig(raw: String, server: String): JSONObject {
     val arr = JSONArray(raw)
-    var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
+    var cfg = arr.optJSONObject(0) ?: JSONObject()
     for (i in 0 until arr.length()) {
         val c = arr.optJSONObject(i) ?: continue
-        if (c.optString("remarks") == server) { cfg = c; break }
+        if (c.optString("remarks") == server) return c
     }
-    val proxy = JSONObject(firstVless(cfg)?.toString() ?: error("нет vless"))
-    proxy.put("tag", "proxy")
-    return JSONObject()
-        .put("outbounds", JSONArray().put(proxy).put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
-        .put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1")))
-        .put("routing", JSONObject()
-            .put("domainStrategy", "AsIs")
-            .put("rules", JSONArray().put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", "proxy"))))
-        .toString()
+    return cfg
+}
+
+private fun vlessOutbounds(cfg: JSONObject): List<JSONObject> {
+    val obs = cfg.optJSONArray("outbounds") ?: return emptyList()
+    val ready = mutableListOf<JSONObject>()
+    val rest = mutableListOf<JSONObject>()
+    for (i in 0 until obs.length()) {
+        val o = obs.optJSONObject(i) ?: continue
+        if (!o.optString("protocol").equals("vless", true)) continue
+        if (hasAddress(o)) ready += o else rest += o
+    }
+    return if (ready.isNotEmpty()) ready else rest
+}
+
+private fun hasAddress(outbound: JSONObject): Boolean {
+    val settings = outbound.optJSONObject("settings") ?: return false
+    val vnext = settings.optJSONArray("vnext") ?: return settings.optString("address").isNotBlank()
+    for (i in 0 until vnext.length()) {
+        if (vnext.optJSONObject(i)?.optString("address").orEmpty().isNotBlank()) return true
+    }
+    return false
+}
+
+private fun collectEndpoints(node: Any?, out: MutableList<Endpoint>) {
+    when (node) {
+        is JSONObject -> {
+            val host = node.optString("address").ifBlank { node.optString("host") }
+            val port = node.optInt("port", 0)
+            if (host.isNotBlank() && port in 1..65535 && host != "0.0.0.0" && host != "127.0.0.1" && !host.contains("://") && !host.startsWith("geo")) {
+                out += Endpoint(host, port)
+            }
+            val keys = node.keys()
+            while (keys.hasNext()) collectEndpoints(node.opt(keys.next()), out)
+        }
+        is JSONArray -> for (i in 0 until node.length()) collectEndpoints(node.opt(i), out)
+    }
 }
 
 private fun ensureDirect(cfg: JSONObject) {
@@ -174,11 +232,4 @@ private fun stripGeo(node: Any?) {
 
 private fun hasGeo(text: String) = "geosite:" in text || "geoip:" in text
 
-private fun firstVless(cfg: JSONObject): JSONObject? {
-    val obs = cfg.optJSONArray("outbounds") ?: return null
-    for (i in 0 until obs.length()) {
-        val o = obs.optJSONObject(i) ?: continue
-        if (o.optString("protocol") == "vless") return o
-    }
-    return null
-}
+private fun firstVless(cfg: JSONObject): JSONObject? = vlessOutbounds(cfg).firstOrNull()

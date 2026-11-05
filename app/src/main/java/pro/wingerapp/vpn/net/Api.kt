@@ -97,7 +97,13 @@ object Api {
     fun cabinet(): Cabinet? {
         val me = get("$BASE/me")
         if (me.first != 200) return null
-        val user = JSONObject(me.second)
+        val root = JSONObject(me.second)
+        val user = when {
+            root.has("webAccount") || root.has("telegramId") || root.has("id") -> root
+            root.optJSONObject("user") != null -> root.getJSONObject("user")
+            root.optJSONObject("data") != null -> root.getJSONObject("data")
+            else -> root
+        }
         val sub = get("$BASE/subscription")
         val has = sub.first == 200 && sub.second.isNotBlank() && sub.second != "null"
         val o = if (has) JSONObject(sub.second) else null
@@ -112,11 +118,11 @@ object Api {
         fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
         val used = "%.1f".format(gb(usedRaw)).replace('.', ',')
         val total = if (o == null || o.isNull("trafficLimit") || limitRaw <= 0) "∞" else "%.0f ГБ".format(gb(limitRaw))
-        val linked = user.optString("telegramId").isNotBlank()
+        val linked = jsonText(user, "telegramId").ifBlank { jsonText(user.optJSONObject("webAccount"), "telegramId") }.isNotBlank()
         val devices = if (has) deviceList() else emptyList()
         return Cabinet(
-            login = user.optJSONObject("webAccount")?.optString("login").orEmpty().ifBlank { "аккаунт" },
-            telegram = if (linked) user.optString("username").ifBlank { "привязан" } else null,
+            login = user.optJSONObject("webAccount")?.optString("login").orEmpty().ifBlank { jsonText(user, "username") }.ifBlank { "аккаунт" },
+            telegram = if (linked) "привязан" else null,
             plan = plan?.optString("name")?.ifBlank { null } ?: offers.planName,
             status = o?.optString("status").orEmpty().ifBlank { "NONE" },
             expires = o?.optString("expiresAt").orEmpty(),
@@ -221,20 +227,33 @@ object Api {
         return thread(id)
     }
 
-    fun attachmentBytes(ticketId: String, fileId: String): ByteArray? {
-        val (code, bytes) = bytes("$BASE/support/tickets/$ticketId/attachments/$fileId")
-        return if (code in 200..299) bytes else null
+    fun attachmentBytes(ticketId: String, file: SupportFile): ByteArray? {
+        val direct = file.url.takeIf { it.startsWith("http") }
+        val (code, raw) = bytes(direct ?: "$BASE/support/tickets/$ticketId/attachments/${file.id}")
+        if (code !in 200..299 || raw.isEmpty()) return null
+        if (raw[0] == '{'.code.toByte()) {
+            val o = runCatching { JSONObject(String(raw)) }.getOrNull() ?: return null
+            val encoded = jsonText(o, "data").ifBlank { jsonText(o, "dataBase64") }.ifBlank { jsonText(o, "base64") }
+            if (encoded.isNotBlank()) return runCatching { android.util.Base64.decode(encoded, android.util.Base64.DEFAULT) }.getOrNull()
+            val url = jsonText(o, "url").ifBlank { jsonText(o, "href") }
+            if (url.startsWith("http")) {
+                val (c2, raw2) = bytes(url)
+                return if (c2 in 200..299) raw2 else null
+            }
+            return null
+        }
+        return raw
     }
 
-    fun telegramLink(): String? {
+    fun telegramLink(): String {
         val (code, text) = post("$BASE/link/telegram/initiate", "{}")
-        if (code !in 200..299) return null
-        val o = runCatching { JSONObject(text) }.getOrNull() ?: return null
-        val ready = o.optString("url").ifBlank { o.optString("link") }
+        if (code !in 200..299) error(apiError(code, text, "Telegram не открылся"))
+        val o = runCatching { JSONObject(text) }.getOrNull() ?: error("Telegram не открылся")
+        val ready = jsonText(o, "url").ifBlank { jsonText(o, "link") }.ifBlank { jsonText(o, "deepLink") }
         if (ready.startsWith("http")) return ready
-        val bot = o.optString("botUsername").ifBlank { o.optString("bot") }
-        val token = o.optString("code").ifBlank { o.optString("token") }
-        if (bot.isBlank() || token.isBlank()) return null
+        val bot = jsonText(o, "botUsername").ifBlank { jsonText(o, "bot") }
+        val token = jsonText(o, "code").ifBlank { jsonText(o, "token") }
+        if (bot.isBlank() || token.isBlank()) error("Telegram не открылся")
         return "https://t.me/$bot?start=link_$token"
     }
 
@@ -259,20 +278,58 @@ object Api {
         if (code != 200) return SupportThread(null, emptyList())
         val root = runCatching { JSONObject(text) }.getOrNull() ?: return SupportThread(null, emptyList())
         if (root.optString("status") == "closed") return SupportThread(null, emptyList())
-        val messages = root.optJSONArray("messages") ?: JSONArray()
-        val lines = (0 until messages.length()).map { i ->
-            val m = messages.getJSONObject(i)
-            val files = m.optJSONArray("attachments") ?: JSONArray()
-            val parsed = (0 until files.length()).mapNotNull { n ->
-                val f = files.optJSONObject(n) ?: return@mapNotNull null
-                if (f.optString("purgedAt").isNotBlank()) return@mapNotNull null
-                val fid = f.optString("id")
-                if (fid.isBlank()) return@mapNotNull null
-                SupportFile(fid, f.optString("filename").ifBlank { "файл" }, f.optString("mimeType"))
-            }
-            SupportLine(if (m.optString("authorType") == "user") "Вы" else "Поддержка", m.optString("content"), parsed)
+        val messages = messageArray(root)
+        val lines = (0 until messages.length()).mapNotNull { i ->
+            val m = messages.optJSONObject(i) ?: return@mapNotNull null
+            val files = filesOf(m)
+            val text = jsonText(m, "content").ifBlank { jsonText(m, "text") }.ifBlank { jsonText(m, "body") }
+            if (text.isBlank() && files.isEmpty()) return@mapNotNull null
+            val kind = jsonText(m, "authorType").ifBlank { jsonText(m, "role") }.ifBlank { jsonText(m, "sender") }.lowercase()
+            val mine = kind == "user" || kind == "client" || kind == "customer"
+            SupportLine(if (mine) "Вы" else "Поддержка", text, files)
         }
         return SupportThread(id, lines)
+    }
+
+    private fun messageArray(root: JSONObject): JSONArray {
+        root.optJSONArray("messages")?.takeIf { it.length() > 0 }?.let { return it }
+        listOf("ticket", "data", "item").forEach { key ->
+            root.optJSONObject(key)?.optJSONArray("messages")?.takeIf { it.length() > 0 }?.let { return it }
+        }
+        return root.optJSONArray("messages") ?: JSONArray()
+    }
+
+    private fun filesOf(m: JSONObject): List<SupportFile> {
+        val out = mutableListOf<SupportFile>()
+        fun take(f: JSONObject) {
+            val purged = jsonText(f, "purgedAt")
+            if (purged.isNotBlank()) return
+            val id = jsonText(f, "id").ifBlank { jsonText(f, "attachmentId") }
+            if (id.isBlank()) return
+            val name = jsonText(f, "filename").ifBlank { jsonText(f, "name") }.ifBlank { jsonText(f, "fileName") }.ifBlank { "файл" }
+            val mime = jsonText(f, "mimeType").ifBlank { jsonText(f, "mime") }.ifBlank { jsonText(f, "contentType") }
+            val url = jsonText(f, "url").ifBlank { jsonText(f, "href") }
+            val known = f.has("filename") || f.has("mimeType") || f.has("name") || url.isNotBlank()
+            if (!known) return
+            out += SupportFile(id, name, mime.ifBlank { guessMime(name) }, url)
+        }
+        listOf("attachments", "files", "images").forEach { key ->
+            val arr = m.optJSONArray(key) ?: return@forEach
+            for (i in 0 until arr.length()) m.let { arr.optJSONObject(i)?.let { take(it) } }
+        }
+        m.optJSONObject("attachment")?.let { take(it) }
+        return out.distinctBy { it.id }
+    }
+
+    private fun guessMime(name: String): String {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return if (ext in setOf("png", "jpg", "jpeg", "webp", "gif")) "image/$ext" else "application/octet-stream"
+    }
+
+    private fun jsonText(o: JSONObject?, key: String): String {
+        if (o == null || !o.has(key) || o.isNull(key)) return ""
+        val value = o.opt(key)?.toString().orEmpty()
+        return if (value == "null") "" else value
     }
 
     private fun jsonList(text: String, vararg keys: String): JSONArray {
@@ -438,7 +495,7 @@ data class Offer(val days: Int, val price: String, val currency: String, val pri
     fun amount(gateway: String) = prices[gateway] ?: price
 }
 data class PayWay(val title: String, val hint: String, val gateway: String, val autopay: Boolean)
-data class SupportFile(val id: String, val name: String, val mime: String)
+data class SupportFile(val id: String, val name: String, val mime: String, val url: String = "")
 data class SupportLine(val author: String, val text: String, val files: List<SupportFile> = emptyList())
 data class SupportThread(val id: String?, val lines: List<SupportLine>)
 data class Attached(val name: String, val mime: String, val bytes: ByteArray)
