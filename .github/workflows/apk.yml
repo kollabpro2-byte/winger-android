@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -24,3 +26,11 @@ jobs:
         with:
           name: winger-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(grep versionName app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          cp app/build/outputs/apk/debug/app-debug.apk "winger-${ver}.apk"
+          gh release create "v${ver}" "winger-${ver}.apk" --title "Winger Android ${ver}" --notes "Custom Tabs first, WebView fallback" \
+            || gh release upload "v${ver}" "winger-${ver}.apk" --clobber
