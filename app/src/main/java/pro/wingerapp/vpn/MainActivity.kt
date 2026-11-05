@@ -95,9 +95,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         VpnLog.init(this)
         VpnLog.add("app start")
-        setContent { App(this, hwid(), ::connect, ::disconnect) }
-    }
-        super.onCreate(savedInstanceState)
         pro.wingerapp.vpn.net.Api.init(this)
         setContent { App(this, hwid(), ::connect, ::disconnect) }
     }
