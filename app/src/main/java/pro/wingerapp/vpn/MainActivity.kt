@@ -4,7 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Bundle
 import android.provider.Settings
@@ -48,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -283,6 +288,8 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var ignoreGeo by remember { mutableStateOf(false) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var chat by remember { mutableStateOf(false) }
     var up by remember { mutableStateOf("0 Б") }
     var down by remember { mutableStateOf("0 Б") }
     val scope = rememberCoroutineScope()
@@ -299,24 +306,41 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         raw = body.raw
                         servers = body.servers
                         if (place.isBlank()) place = body.servers.first().name
-                        if (ping) {
-                            Libv2ray.initCoreEnv(ctx.filesDir.absolutePath, "")
-                            val http = Store.pingHttp(ctx)
-                            val url = Store.testUrl(ctx)
-                            val dns = Store.dnsServer(ctx)
-                            val direct = Store.bypass(ctx)
-                            pings = body.servers.associate { node ->
-                                node.name to if (http) httpPing(pingConfig(body.raw, node.name, ignoreGeo, dns, direct), url) else tcpPing(node.host, node.port)
-                            }
-                        }
+                        body
+                    } else null
+                }.onFailure { err = it.message }.getOrNull()
+            }?.let { body ->
+                if (!ping) {
+                    notice = "Подписка обновлена"
+                    scope.launch {
+                        kotlinx.coroutines.delay(2600)
+                        if (notice == "Подписка обновлена") notice = null
                     }
-                }.onFailure { err = it.message }
+                } else {
+                    Libv2ray.initCoreEnv(ctx.filesDir.absolutePath, "")
+                    val http = Store.pingHttp(ctx)
+                    val url = Store.testUrl(ctx)
+                    for (node in body.servers) {
+                        val ms = withContext(Dispatchers.IO) {
+                            if (http) httpPing(delayConfig(body.raw, node.name), url) else tcpPing(node.host, node.port)
+                        }
+                        pings = pings + (node.name to ms)
+                    }
+                }
             }
             pinging = false
             refreshing = false
         }
     }
     LaunchedEffect(Unit) { reload(true) }
+    DisposableEffect(Unit) {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java)
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { reload(true) }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+        onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(60 * 60 * 1000L)
@@ -342,7 +366,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
         when (tab) {
             0 -> HomeTab(
                 ctx = ctx, hwid = hwid, sub = sub, servers = servers, pings = pings, place = place,
-                on = on, elapsed = elapsed, up = up, down = down, pinging = pinging, refreshing = refreshing, err = err,
+                on = on, elapsed = elapsed, up = up, down = down, pinging = pinging, refreshing = refreshing, err = err, notice = notice,
                 ignoreGeo = ignoreGeo, raw = raw, connect = connect, disconnect = disconnect, reload = reload,
                 onSelect = { name ->
                     place = name
@@ -359,7 +383,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                     }
                 }
             )
-            1 -> AccountTab(ctx, sub)
+            1 -> AccountTab(ctx, sub) { chat = true }
             2 -> SettingsTab(ctx, ignoreGeo, { ignoreGeo = it }) {
                 if (on && raw.isNotBlank() && place.isNotBlank()) connect(cfg(place))
             }
@@ -374,6 +398,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             NavItem("Аккаунт", tab == 1) { tab = 1 }
             NavItem("Настройки", tab == 2) { tab = 2 }
         }
+        if (chat) SupportChat(ctx) { chat = false }
     }
 }
 
@@ -386,14 +411,14 @@ private fun NavItem(label: String, active: Boolean, onClick: () -> Unit) {
 @Composable
 private fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
-    place: String, on: Boolean, elapsed: String, up: String, down: String, pinging: Boolean, refreshing: Boolean, err: String?,
+    place: String, on: Boolean, elapsed: String, up: String, down: String, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
     ignoreGeo: Boolean, raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.29", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.30", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -438,7 +463,9 @@ private fun HomeTab(
             Text(trafficText(sub), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
         err?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (notice != null) Text(notice, color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).background(Color(0x2434C759)).padding(horizontal = 12.dp, vertical = 6.dp))
+            else Spacer(Modifier.weight(1f))
             Box(Modifier.size(32.dp).clip(CircleShape).background(Elev).border(1.dp, Color(0xFF2A4A66), CircleShape).clickable { reload(false) }, contentAlignment = Alignment.Center) {
                 if (refreshing) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Cyan)
                 else Text("⟳", color = Color(0xFFC9D7E4), fontSize = 16.sp)
@@ -449,30 +476,32 @@ private fun HomeTab(
             }
         }
         if (servers.isEmpty()) Text("Загружаем подписку…", color = Dim, modifier = Modifier.padding(top = 8.dp))
-        Column(Modifier.alpha(if (refreshing || pinging) 0.35f else 1f)) {
+        Column {
             grouped(servers).forEach { (title, nodes) ->
                 Text(title, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                 nodes.forEach { node ->
                     val selected = place == node.name
+                    val waiting = pinging && !pings.containsKey(node.name)
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 3.dp)
                             .clip(RoundedCornerShape(14.dp))
                             .background(if (selected) Purple.copy(.22f) else Elev)
                             .border(1.dp, if (selected) Purple.copy(.7f) else Line, RoundedCornerShape(14.dp))
-                            .clickable { onSelect(node.name) }.padding(horizontal = 12.dp, vertical = 10.dp),
+                            .clickable { onSelect(node.name) }.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(node.name, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 11.sp)
+                            Text(node.name, color = Color(0xFFE8EEF6), fontWeight = FontWeight.Normal, fontSize = 13.sp)
+                            Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 10.sp)
                         }
-                        if (pinging) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
-                        else {
+                        if (waiting || !pings.containsKey(node.name)) {
+                            if (waiting) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
+                        } else {
                             val ms = pings[node.name]
-                            val c = when { ms == null -> Muted; ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
+                            val c = when { ms == null -> Color(0xFFF07171); ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(6.dp).clip(CircleShape).background(c))
-                                Text(ms?.toString() ?: "—", color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+                                Text(if (ms == null) "нет" else ms.toString(), color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
                             }
                         }
                     }
@@ -484,7 +513,7 @@ private fun HomeTab(
 }
 
 @Composable
-private fun AccountTab(ctx: Context, sub: Sub?) {
+private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
@@ -506,7 +535,7 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
         scope.launch {
             val c = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() }
             cab = c
-            thread = withContext(Dispatchers.IO) { runCatching { Api.supportThread() }.getOrNull() }
+            if (c?.telegram != null) withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() } }
             if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
         }
     }
@@ -582,9 +611,30 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                 }
             }
             Section {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(if (c.telegram != null) "Telegram" else "Telegram", color = Color.White)
-                    Text(c.telegram?.let { "@$it" } ?: "привязать", color = Cyan, fontSize = 13.sp, modifier = Modifier.clickable { if (c.telegram == null) openCabinet(ctx) })
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Telegram", color = Color.White)
+                        if (c.telegram == null) Text("+3 дня к подписке", color = Color(0xFF86EFAC), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    if (c.telegram == null) {
+                        Text("Привязать", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Purple).clickable {
+                            scope.launch {
+                                val url = withContext(Dispatchers.IO) { Api.telegramLink() }
+                                if (url == null) { note = "не удалось открыть Telegram"; return@launch }
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                repeat(20) {
+                                    kotlinx.coroutines.delay(3000)
+                                    val fresh = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() } ?: return@repeat
+                                    cab = fresh
+                                    if (fresh.telegram != null) {
+                                        withContext(Dispatchers.IO) { Api.claimTelegramGift() }
+                                        load()
+                                        return@launch
+                                    }
+                                }
+                            }
+                        }.padding(horizontal = 14.dp, vertical = 8.dp))
+                    } else Text(c.telegram.let { if (it.startsWith("@")) it else "@$it" }, color = Cyan, fontSize = 13.sp)
                 }
                 Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
                 c.devices.forEach { d ->
@@ -606,26 +656,96 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                 }
             }
             Section {
-                Text("ПОДДЕРЖКА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                thread?.lines?.takeLast(6)?.forEach { line ->
-                    Text("${line.author}: ${line.text}", color = if (line.author == "Вы") Color.White else Color(0xFFC4B5FD), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.fillMaxWidth().clickable { onSupport() }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("ПОДДЕРЖКА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text("открыть", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Purple).padding(horizontal = 14.dp, vertical = 8.dp))
                 }
-                OutlinedTextField(draft, { draft = it }, placeholder = { Text("Напишите, что случилось") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 3, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
-                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("📎", fontSize = 20.sp, modifier = Modifier.clickable { pick.launch(arrayOf("image/png", "image/jpeg", "image/webp", "application/pdf")) }.padding(6.dp))
-                    files.forEach { Text(it.name, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp)) }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SupportChat(ctx: Context, onClose: () -> Unit) {
+    var thread by remember { mutableStateOf<pro.wingerapp.vpn.net.SupportThread?>(null) }
+    var draft by remember { mutableStateOf("") }
+    var files by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.Attached>()) }
+    var images by remember { mutableStateOf(mapOf<String, android.graphics.Bitmap>()) }
+    var note by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val scroll = rememberScrollState()
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        scope.launch {
+            val added = withContext(Dispatchers.IO) { uris.mapNotNull { readAttachment(ctx, it) } }
+            files = files + added
+        }
+    }
+    fun load() {
+        scope.launch {
+            val next = withContext(Dispatchers.IO) { runCatching { Api.supportThread() }.getOrNull() }
+            thread = next
+            val id = next?.id ?: return@launch
+            val missing = next.lines.flatMap { it.files }.filter { it.mime.startsWith("image/") && it.id !in images }
+            if (missing.isEmpty()) return@launch
+            val loaded = withContext(Dispatchers.IO) {
+                missing.mapNotNull { file ->
+                    val bytes = Api.attachmentBytes(id, file.id) ?: return@mapNotNull null
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@mapNotNull null
+                    file.id to bmp
                 }
-                Box(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable(enabled = !paying) {
+            }
+            images = images + loaded
+        }
+    }
+    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(thread?.id) {
+        while (true) {
+            kotlinx.coroutines.delay(4000)
+            load()
+        }
+    }
+    LaunchedEffect(thread?.lines?.size, images.size) { scroll.scrollTo(scroll.maxValue) }
+    Column(Modifier.fillMaxSize().background(Bg)) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Поддержка", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("Закрыть", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(Purple).clickable { onClose() }.padding(horizontal = 16.dp, vertical = 10.dp))
+        }
+        if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
+        Column(Modifier.weight(1f).verticalScroll(scroll).padding(horizontal = 16.dp)) {
+            val lines = thread?.lines.orEmpty()
+            if (lines.isEmpty()) Text("Напишите сообщение, и откроется новый тикет.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+            lines.forEach { line ->
+                val mine = line.author == "Вы"
+                Column(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+                    Text(line.author, color = Muted, fontSize = 11.sp)
+                    if (line.text.isNotBlank()) {
+                        Text(line.text, color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp).widthIn(max = 280.dp).clip(RoundedCornerShape(16.dp)).background(if (mine) Purple.copy(.45f) else Elev).padding(12.dp))
+                    }
+                    line.files.forEach { file ->
+                        val bmp = images[file.id]
+                        if (bmp != null) Image(bmp.asImageBitmap(), file.name, Modifier.padding(top = 6.dp).widthIn(max = 240.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.FillWidth)
+                        else Text(file.name, color = Cyan, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Column(Modifier.fillMaxWidth().background(Color(0xFF06101C)).padding(12.dp)) {
+            if (files.isNotEmpty()) Text(files.joinToString { it.name }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("📎", fontSize = 22.sp, modifier = Modifier.clickable { pick.launch(arrayOf("image/png", "image/jpeg", "image/webp", "application/pdf")) }.padding(6.dp))
+                OutlinedTextField(draft, { draft = it }, placeholder = { Text("Сообщение") }, modifier = Modifier.weight(1f), colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+                Text("➤", color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp).clip(CircleShape).background(Purple).clickable(enabled = !sending) {
                     if (draft.isBlank() && files.isEmpty()) return@clickable
-                    paying = true
+                    sending = true
                     scope.launch {
-                        val sent = draft
-                        val attached = files
-                        val err = withContext(Dispatchers.IO) { runCatching { Api.sendSupport(thread?.id, sent, attached) }.getOrElse { it.message } }
-                        paying = false
+                        val err = withContext(Dispatchers.IO) { runCatching { Api.sendSupport(thread?.id, draft.trim(), files) }.getOrElse { it.message } }
+                        sending = false
                         if (err == null) { draft = ""; files = emptyList(); note = ""; load() } else note = err
                     }
-                }.padding(13.dp), contentAlignment = Alignment.Center) { Text(if (paying) "Отправляю…" else "Отправить", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                }.padding(10.dp))
             }
         }
     }

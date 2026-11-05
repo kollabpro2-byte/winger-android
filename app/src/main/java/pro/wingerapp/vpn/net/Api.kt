@@ -211,18 +211,76 @@ object Api {
     fun supportThread(): SupportThread {
         val (code, text) = get("$BASE/support/tickets")
         if (code != 200 || text.isBlank()) return SupportThread(null, emptyList())
-        val arr = runCatching {
-            val t = text.trim()
-            if (t.startsWith("[")) JSONArray(t) else JSONObject(t).optJSONArray("tickets") ?: JSONObject(t).optJSONArray("items") ?: JSONArray()
-        }.getOrDefault(JSONArray())
+        val arr = jsonList(text, "tickets", "items")
         var id = ""
         for (i in 0 until arr.length()) {
             val t = arr.optJSONObject(i) ?: continue
             if (t.optString("status") != "closed") { id = t.optString("id"); break }
         }
-        if (id.isBlank() && arr.length() > 0) id = arr.optJSONObject(0)?.optString("id").orEmpty()
         if (id.isBlank()) return SupportThread(null, emptyList())
-        return SupportThread(id, ticketLines(id))
+        return thread(id)
+    }
+
+    fun attachmentBytes(ticketId: String, fileId: String): ByteArray? {
+        val (code, bytes) = bytes("$BASE/support/tickets/$ticketId/attachments/$fileId")
+        return if (code in 200..299) bytes else null
+    }
+
+    fun telegramLink(): String? {
+        val (code, text) = post("$BASE/link/telegram/initiate", "{}")
+        if (code !in 200..299) return null
+        val o = runCatching { JSONObject(text) }.getOrNull() ?: return null
+        val ready = o.optString("url").ifBlank { o.optString("link") }
+        if (ready.startsWith("http")) return ready
+        val bot = o.optString("botUsername").ifBlank { o.optString("bot") }
+        val token = o.optString("code").ifBlank { o.optString("token") }
+        if (bot.isBlank() || token.isBlank()) return null
+        return "https://t.me/$bot?start=link_$token"
+    }
+
+    fun claimTelegramGift(): Boolean {
+        val (code, text) = get("$BASE/quests")
+        if (code != 200) return false
+        val arr = jsonList(text, "quests", "items")
+        for (i in 0 until arr.length()) {
+            val q = arr.optJSONObject(i) ?: continue
+            val kind = listOf("code", "action", "type", "key").firstNotNullOfOrNull { q.optString(it).ifBlank { null } }.orEmpty()
+            if (kind != "LINK_TELEGRAM" || !q.optBoolean("claimable")) continue
+            val id = q.optString("id")
+            if (id.isBlank()) continue
+            val (c, _) = post("$BASE/quests/$id/claim", "{}")
+            return c in 200..299
+        }
+        return false
+    }
+
+    private fun thread(id: String): SupportThread {
+        val (code, text) = get("$BASE/support/tickets/$id")
+        if (code != 200) return SupportThread(null, emptyList())
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return SupportThread(null, emptyList())
+        if (root.optString("status") == "closed") return SupportThread(null, emptyList())
+        val messages = root.optJSONArray("messages") ?: JSONArray()
+        val lines = (0 until messages.length()).map { i ->
+            val m = messages.getJSONObject(i)
+            val files = m.optJSONArray("attachments") ?: JSONArray()
+            val parsed = (0 until files.length()).mapNotNull { n ->
+                val f = files.optJSONObject(n) ?: return@mapNotNull null
+                if (f.optString("purgedAt").isNotBlank()) return@mapNotNull null
+                val fid = f.optString("id")
+                if (fid.isBlank()) return@mapNotNull null
+                SupportFile(fid, f.optString("filename").ifBlank { "файл" }, f.optString("mimeType"))
+            }
+            SupportLine(if (m.optString("authorType") == "user") "Вы" else "Поддержка", m.optString("content"), parsed)
+        }
+        return SupportThread(id, lines)
+    }
+
+    private fun jsonList(text: String, vararg keys: String): JSONArray {
+        val t = text.trim()
+        if (t.startsWith("[")) return JSONArray(t)
+        val o = runCatching { JSONObject(t) }.getOrNull() ?: return JSONArray()
+        keys.forEach { key -> o.optJSONArray(key)?.let { return it } }
+        return JSONArray()
     }
 
     fun sendSupport(ticketId: String?, message: String, files: List<Attached>): String? {
@@ -249,15 +307,21 @@ object Api {
         return null
     }
 
-    private fun ticketLines(id: String): List<SupportLine> {
-        val (code, text) = get("$BASE/support/tickets/$id")
-        if (code != 200) return emptyList()
-        val messages = runCatching { JSONObject(text).optJSONArray("messages") }.getOrNull() ?: return emptyList()
-        return (0 until messages.length()).map { i ->
-            val m = messages.getJSONObject(i)
-            val mine = m.optString("authorType") == "user"
-            SupportLine(if (mine) "Вы" else "Поддержка", m.optString("content"))
+    private fun bytes(url: String): Pair<Int, ByteArray> {
+        val c = open(url).apply {
+            requestMethod = "GET"
+            setRequestProperty("Accept", "*/*")
+            setRequestProperty("Origin", "https://my.wingerapp.pro")
+            setRequestProperty("Referer", "https://my.wingerapp.pro/")
+            setRequestProperty("User-Agent", "Mozilla/5.0 WingerAndroid")
+            connectTimeout = 15000
+            readTimeout = 20000
+            val cookie = cookies.cookieStore.get(URI(url)).joinToString("; ") { "${it.name}=${it.value}" }
+            if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
         }
+        val code = c.responseCode
+        val stream = if (code in 200..299) c.inputStream else c.errorStream
+        return code to (stream?.readBytes() ?: ByteArray(0))
     }
 
     private fun legalKeys(): JSONArray {
@@ -374,7 +438,8 @@ data class Offer(val days: Int, val price: String, val currency: String, val pri
     fun amount(gateway: String) = prices[gateway] ?: price
 }
 data class PayWay(val title: String, val hint: String, val gateway: String, val autopay: Boolean)
-data class SupportLine(val author: String, val text: String)
+data class SupportFile(val id: String, val name: String, val mime: String)
+data class SupportLine(val author: String, val text: String, val files: List<SupportFile> = emptyList())
 data class SupportThread(val id: String?, val lines: List<SupportLine>)
 data class Attached(val name: String, val mime: String, val bytes: ByteArray)
 data class HwDevice(val hwid: String, val title: String, val seen: String)

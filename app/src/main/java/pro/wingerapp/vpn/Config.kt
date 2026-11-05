@@ -74,17 +74,22 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
     return cfg.toString()
 }
 
-fun pingConfig(raw: String, server: String, ignoreGeo: Boolean, dns: String?, directDomains: List<String>): String {
-    val cfg = JSONObject(xrayConfigFor(raw, server, ignoreGeo, dns, directDomains))
-    val inbounds = cfg.optJSONArray("inbounds") ?: return cfg.toString()
-    val keep = JSONArray()
-    for (i in 0 until inbounds.length()) {
-        val item = inbounds.optJSONObject(i)
-        if (item?.optString("tag") == "tun" || item?.optString("protocol") == "tun") continue
-        keep.put(inbounds.get(i))
+fun delayConfig(raw: String, server: String): String {
+    val arr = JSONArray(raw)
+    var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
+    for (i in 0 until arr.length()) {
+        val c = arr.optJSONObject(i) ?: continue
+        if (c.optString("remarks") == server) { cfg = c; break }
     }
-    cfg.put("inbounds", keep)
-    return cfg.toString()
+    val proxy = JSONObject(firstVless(cfg)?.toString() ?: error("нет vless"))
+    proxy.put("tag", "proxy")
+    return JSONObject()
+        .put("outbounds", JSONArray().put(proxy).put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
+        .put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1")))
+        .put("routing", JSONObject()
+            .put("domainStrategy", "AsIs")
+            .put("rules", JSONArray().put(JSONObject().put("type", "field").put("network", "tcp,udp").put("outboundTag", "proxy"))))
+        .toString()
 }
 
 private fun ensureDirect(cfg: JSONObject) {

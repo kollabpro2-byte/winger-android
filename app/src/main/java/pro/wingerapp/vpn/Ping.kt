@@ -8,15 +8,22 @@ fun tcpPing(host: String, port: Int): Int? {
     if (host.isBlank()) return null
     return runCatching {
         val start = System.nanoTime()
-        Socket().use { it.connect(InetSocketAddress(host, port), 2500) }
-        ((System.nanoTime() - start) / 1_000_000).toInt()
+        Socket().use { it.connect(InetSocketAddress(host, port), 5000) }
+        ((System.nanoTime() - start) / 1_000_000).toInt().takeIf { it in 0..5000 }
     }.getOrNull()
 }
 
 fun httpPing(config: String, url: String): Int? {
     val target = url.trim().ifBlank { "https://www.gstatic.com/generate_204" }
-    return runCatching {
-        val ms = Libv2ray.measureOutboundDelay(config, target)
-        if (ms < 0) null else ms.toInt()
-    }.getOrNull()
+    val box = java.util.concurrent.atomic.AtomicReference<Int?>(null)
+    val worker = Thread {
+        box.set(runCatching {
+            val ms = Libv2ray.measureOutboundDelay(config, target)
+            if (ms < 0 || ms > 5000) null else ms.toInt()
+        }.getOrNull())
+    }
+    worker.isDaemon = true
+    worker.start()
+    worker.join(5000)
+    return if (worker.isAlive) null else box.get()
 }
