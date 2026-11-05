@@ -8,7 +8,10 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.provider.Settings
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.browser.customtabs.CustomTabsIntent
@@ -170,31 +173,48 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
     }
 }
 
-private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
-    VpnLog.add("openCabinet: $url, chrome=${hasChrome(ctx)}")
-    try {
-        val builder = CustomTabsIntent.Builder().setShowTitle(true)
-        val intent = builder.build().intent
-        intent.data = Uri.parse(url)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        ctx.startActivity(intent)
-        VpnLog.add("CustomTabs launched")
-        return
-    } catch (e: Exception) {
-        VpnLog.add("CustomTabs failed: ${e.message}")
-    }
-    try {
-        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        VpnLog.add("External browser launched")
-    } catch (e2: Exception) {
-        VpnLog.add("External browser failed: ${e2.message}")
-    }
+private const val CUSTOM_TABS = "android.support.customtabs.action.CustomTabsService"
+
+private fun browserPackage(ctx: Context): String? {
+    val pm = ctx.packageManager
+    val view = Intent(Intent.ACTION_VIEW, Uri.parse("https://my.wingerapp.pro"))
+    val handlers = pm.queryIntentActivities(view, 0)
+        .map { it.activityInfo.packageName }
+        .distinct()
+    return handlers.firstOrNull { hasCustomTabs(ctx, it) } ?: handlers.firstOrNull()
 }
 
-private fun hasChrome(ctx: Context): Boolean {
-    val packages = listOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev", "com.google.android.apps.chrome")
-    return packages.any { pkg ->
-        try { ctx.packageManager.getPackageInfo(pkg, 0); true } catch (_: Exception) { false }
+private fun hasCustomTabs(ctx: Context, pkg: String): Boolean {
+    val svc = Intent(CUSTOM_TABS).setPackage(pkg)
+    return ctx.packageManager.resolveService(svc, 0) != null
+}
+
+private fun hasBrowser(ctx: Context) = browserPackage(ctx) != null
+
+private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
+    val pkg = browserPackage(ctx)
+    val uri = Uri.parse(url)
+    VpnLog.add("openCabinet: $url browser=$pkg")
+    if (pkg != null && hasCustomTabs(ctx, pkg)) {
+        try {
+            val intent = CustomTabsIntent.Builder().setShowTitle(true).build().intent
+            intent.setPackage(pkg)
+            intent.data = uri
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(intent)
+            VpnLog.add("CustomTabs launched: $pkg")
+            return
+        } catch (e: Exception) {
+            VpnLog.add("CustomTabs failed: ${e.message}")
+        }
+    }
+    try {
+        val view = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (pkg != null) view.setPackage(pkg)
+        ctx.startActivity(view)
+        VpnLog.add("External browser launched: $pkg")
+    } catch (e: Exception) {
+        VpnLog.add("External browser failed: ${e.message}")
     }
 }
 
@@ -206,9 +226,9 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
             Spacer(Modifier.weight(1f))
             Text("Регистрация", color = Color.White, fontWeight = FontWeight.SemiBold)
         }
-        if (hasChrome(ctx)) {
+        if (hasBrowser(ctx)) {
             Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-                Text("Регистрация откроется в Chrome", color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                Text("Регистрация откроется в браузере", color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(20.dp))
                 Box(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
@@ -218,41 +238,8 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
             }
         } else {
             AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        setBackgroundColor(android.graphics.Color.WHITE)
-                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.databaseEnabled = true
-                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                        webChromeClient = android.webkit.WebChromeClient()
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                VpnLog.add("WebView start: $url")
-                            }
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                VpnLog.add("WebView finished: $url")
-                            }
-                            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                VpnLog.add("WebView error $errorCode: $description ($failingUrl)")
-                            }
-                            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                url ?: return false
-                                VpnLog.add("WebView navigate: $url")
-                                if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                                    return true
-                                }
-                                return false
-                            }
-                        }
-                        VpnLog.add("WebView loadUrl my.wingerapp.pro")
-                        loadUrl("https://my.wingerapp.pro")
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
+                factory = { context -> cabinetWebView(context, "WebView") },
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
         }
     }
@@ -377,7 +364,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.24", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.25", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -470,7 +457,9 @@ private fun HomeTab(
 @Composable
 private fun AccountTab(ctx: Context, sub: Sub?) {
     var status by remember { mutableStateOf("нажми кнопку, чтобы открыть кабинет") }
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
+    val browser = remember { hasBrowser(ctx) }
+    LaunchedEffect(Unit) { VpnLog.add("browser=${browserPackage(ctx) ?: "нет"}") }
+    Column(Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 84.dp)) {
         Text("Аккаунт", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(if (sub == null) "Подписка не активна" else "Подписка активна", color = if (sub == null) Color(0xFFF87171) else Cyan, modifier = Modifier.padding(top = 8.dp))
         Spacer(Modifier.height(12.dp))
@@ -498,46 +487,12 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                 }.padding(14.dp),
             contentAlignment = Alignment.Center
         ) { Text("🎁 Привязать Telegram", color = Color.White) }
-        if (!hasChrome(ctx)) {
+        if (!browser) {
             Spacer(Modifier.height(16.dp))
-            Text("Chrome не найден, показываю WebView", color = Muted, fontSize = 12.sp)
+            Text("Браузер не найден, кабинет внутри приложения", color = Muted, fontSize = 12.sp)
             AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        setBackgroundColor(android.graphics.Color.WHITE)
-                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.databaseEnabled = true
-                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                        webChromeClient = android.webkit.WebChromeClient()
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                VpnLog.add("AccountWeb start: $url")
-                            }
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                VpnLog.add("AccountWeb finished: $url")
-                            }
-                            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                                VpnLog.add("AccountWeb error $errorCode: $description ($failingUrl)")
-                            }
-                            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                url ?: return false
-                                VpnLog.add("AccountWeb navigate: $url")
-                                if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                                    return true
-                                }
-                                return false
-                            }
-                        }
-                        VpnLog.add("AccountWeb loadUrl")
-                        injectCookies()
-                        loadUrl("https://my.wingerapp.pro")
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(400.dp)
+                factory = { context -> cabinetWebView(context, "AccountWeb") },
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
         }
     }
@@ -571,9 +526,51 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
     }
 }
 
-private fun injectCookies() {
+private fun cabinetWebView(context: Context, tag: String): WebView {
+    return WebView(context).apply {
+        setBackgroundColor(0xFF040D1A.toInt())
+        setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.loadsImagesAutomatically = true
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
+                if (msg != null) VpnLog.add("$tag js: ${msg.message()} @${msg.lineNumber()}")
+                return true
+            }
+        }
+        webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                VpnLog.add("$tag start: $url")
+            }
+            override fun onPageFinished(view: WebView?, url: String?) {
+                VpnLog.add("$tag html loaded: $url")
+            }
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                if (request.isForMainFrame) VpnLog.add("$tag error ${error.errorCode}: ${error.description} (${request.url})")
+            }
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return false
+                VpnLog.add("$tag navigate: $url")
+                if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    return true
+                }
+                return false
+            }
+        }
+        VpnLog.add("$tag loadUrl")
+        injectCookies(this)
+        loadUrl("https://my.wingerapp.pro")
+    }
+}
+
+private fun injectCookies(web: WebView) {
     val cm = CookieManager.getInstance()
     cm.setAcceptCookie(true)
+    cm.setAcceptThirdPartyCookies(web, true)
     val raw = Store.cookies(Api.app)
     if (raw.isBlank()) return
     raw.lineSequence().filter { it.contains("|") }.forEach { line ->
