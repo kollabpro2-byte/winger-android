@@ -118,11 +118,20 @@ object Api {
         fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
         val used = "%.1f".format(gb(usedRaw)).replace('.', ',')
         val total = if (o == null || o.isNull("trafficLimit") || limitRaw <= 0) "∞" else "%.0f ГБ".format(gb(limitRaw))
-        val linked = jsonText(user, "telegramId").ifBlank { jsonText(user.optJSONObject("webAccount"), "telegramId") }.isNotBlank()
+        val tgId = jsonText(user, "telegramId").ifBlank { jsonText(user.optJSONObject("webAccount"), "telegramId") }
+        val tgUser = jsonText(user, "telegramUsername")
+            .ifBlank { jsonText(user, "username") }
+            .ifBlank { jsonText(user.optJSONObject("webAccount"), "telegramUsername") }
+            .ifBlank { jsonText(user.optJSONObject("webAccount"), "username") }
+        val telegramDisplay = when {
+            tgUser.isNotBlank() && tgUser.any { !it.isDigit() } -> if (tgUser.startsWith("@")) tgUser else "@$tgUser"
+            tgId.isNotBlank() -> "ID $tgId"
+            else -> null
+        }
         val devices = if (has) deviceList() else emptyList()
         return Cabinet(
             login = user.optJSONObject("webAccount")?.optString("login").orEmpty().ifBlank { jsonText(user, "username") }.ifBlank { "аккаунт" },
-            telegram = if (linked) "привязан" else null,
+            telegram = telegramDisplay,
             plan = plan?.optString("name")?.ifBlank { null } ?: offers.planName,
             status = o?.optString("status").orEmpty().ifBlank { "NONE" },
             expires = o?.optString("expiresAt").orEmpty(),
@@ -258,22 +267,27 @@ object Api {
     }
 
     fun claimTelegramGift(): String {
-        val (code, text) = get("$BASE/quests")
-        if (code != 200) return "не удалось проверить бонус ($code)"
-        val arr = jsonList(text, "quests", "items")
-        for (i in 0 until arr.length()) {
-            val q = arr.optJSONObject(i) ?: continue
-            if (jsonText(q, "type") != "LINK_TELEGRAM") continue
-            val status = jsonText(q, "status").uppercase()
-            val claimable = q.optBoolean("claimable") || jsonText(q, "claimable") == "true"
-            if (!claimable) {
-                if (status in setOf("CLAIMED", "COMPLETED", "DONE", "REWARDED")) return "done"
-                return "wait"
+        // Трогаем сессию — иногда квест появляется только после загрузки кабинета
+        get("$BASE/me")
+        repeat(2) { attempt ->
+            val (code, text) = get("$BASE/quests")
+            if (code != 200) return "не удалось проверить бонус ($code)"
+            val arr = jsonList(text, "quests", "items")
+            for (i in 0 until arr.length()) {
+                val q = arr.optJSONObject(i) ?: continue
+                if (jsonText(q, "type") != "LINK_TELEGRAM") continue
+                val status = jsonText(q, "status").uppercase()
+                val claimable = q.optBoolean("claimable") || jsonText(q, "claimable") == "true"
+                if (!claimable) {
+                    if (status in setOf("CLAIMED", "COMPLETED", "DONE", "REWARDED")) return "done"
+                    return "wait"
+                }
+                val id = jsonText(q, "id")
+                if (id.isBlank()) return "не найден номер задания"
+                val (c, body) = call("POST", "$BASE/quests/$id/claim", null)
+                return if (c in 200..299) "ok" else apiError(c, body, "не удалось забрать +3 дня")
             }
-            val id = jsonText(q, "id")
-            if (id.isBlank()) return "не найден номер задания"
-            val (c, body) = call("POST", "$BASE/quests/$id/claim", null)
-            return if (c in 200..299) "ok" else apiError(c, body, "не удалось забрать +3 дня")
+            if (attempt == 0) Thread.sleep(1200)
         }
         return "missing"
     }

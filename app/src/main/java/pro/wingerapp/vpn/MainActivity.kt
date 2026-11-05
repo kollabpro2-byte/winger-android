@@ -332,7 +332,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                                     else coroutineScope { configs.map { cfg -> async { httpPing(cfg, url) } }.awaitAll().filterNotNull().minOrNull() }
                                 } else {
                                     val points = tcpEndpoints(body.raw, node.name)
-                                    if (points.isEmpty()) null
+                                    if (points.isEmpty()) -1
                                     else coroutineScope { points.map { point -> async { tcpPing(point.host, point.port) } }.awaitAll().filterNotNull().minOrNull() }
                                 }
                                 withContext(Dispatchers.Main) { pings = pings + (node.name to ms) }
@@ -511,10 +511,14 @@ private fun HomeTab(
                         if (waiting) {
                             CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
                         } else if (pings.containsKey(node.name)) {
-                            val c = when { ms == null -> Color(0xFFF07171); ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
+                            val c = when { ms == null || ms == -1 -> Color(0xFF7C8A9B); ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(6.dp).clip(CircleShape).background(c))
-                                Text(if (ms == null) "нет" else ms.toString(), color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+                                Text(when {
+                                    ms == null -> "нет"
+                                    ms == -1 -> "н/д"
+                                    else -> ms.toString()
+                                }, color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
                             }
                         }
                     }
@@ -529,6 +533,7 @@ private fun HomeTab(
 private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("") }
+    var giftClaimed by remember { mutableStateOf(false) }
     var paying by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var ways by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.PayWay>()) }
@@ -550,7 +555,10 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
             cab = c
             if (c?.telegram != null) {
                 val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
+                giftClaimed = gift == "done" || gift == "ok"
                 if (gift == "ok") note = "К подписке добавлены 3 дня"
+            } else {
+                giftClaimed = false
             }
             if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
         }
@@ -572,7 +580,7 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                         "ok" -> "К подписке добавлены 3 дня"
                         "done" -> "Telegram привязан. Бонус уже был получен"
                         "wait" -> "Telegram привязан, но +3 дня ещё не начислены. Нажмите «Забрать»"
-                        "missing" -> "Telegram привязан. Задание +3 дня в кабинете не найдено"
+                        "missing" -> "Telegram привязан. Задание +3 дня появится после захода в личный кабинет на сайте"
                         else -> "Telegram привязан. $gift"
                     }
                     return@launch
@@ -602,22 +610,29 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 Section {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("TELEGRAM", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                        Text("привязан", color = Color(0xFF86EFAC), fontSize = 13.sp)
+                        Text(c.telegram ?: "привязан", color = Color(0xFF86EFAC), fontSize = 13.sp)
                     }
-                    Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
-                        scope.launch {
-                            val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
-                            note = when (gift) {
-                                "ok" -> "К подписке добавлены 3 дня"
-                                "done" -> "Бонус за Telegram уже получен"
-                                "wait" -> "Бонус ещё нельзя забрать. Откройте бота и нажмите снова"
-                                "missing" -> "Задание +3 дня в кабинете не найдено"
-                                else -> gift
+                    if (!giftClaimed) {
+                        Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
+                            scope.launch {
+                                val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
+                                note = when (gift) {
+                                    "ok" -> "К подписке добавлены 3 дня"
+                                    "done" -> "Бонус за Telegram уже получен"
+                                    "wait" -> "Бонус ещё нельзя забрать. Откройте бота и нажмите снова"
+                                    "missing" -> "Задание +3 дня в кабинете не найдено. Зайдите на сайт в личный кабинет и попробуйте снова"
+                                    else -> gift
+                                }
+                                if (gift == "ok" || gift == "done") {
+                                    giftClaimed = true
+                                    load()
+                                }
                             }
-                            if (gift == "ok") load()
+                        }.padding(13.dp), contentAlignment = Alignment.Center) {
+                            Text("Забрать +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
-                    }.padding(13.dp), contentAlignment = Alignment.Center) {
-                        Text("Забрать +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    } else {
+                        Text("Бонус +3 дня уже получен", color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                     }
                 }
             }
