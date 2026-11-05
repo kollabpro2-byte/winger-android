@@ -364,7 +364,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.25", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.26", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -456,44 +456,105 @@ private fun HomeTab(
 
 @Composable
 private fun AccountTab(ctx: Context, sub: Sub?) {
-    var status by remember { mutableStateOf("нажми кнопку, чтобы открыть кабинет") }
-    val browser = remember { hasBrowser(ctx) }
-    LaunchedEffect(Unit) { VpnLog.add("browser=${browserPackage(ctx) ?: "нет"}") }
-    Column(Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 84.dp)) {
+    var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
+    var note by remember { mutableStateOf("загружаю кабинет…") }
+    var paying by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf(30) }
+    var confirm by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    fun load() {
+        scope.launch {
+            val c = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() }
+            cab = c
+            note = if (c == null) "не удалось загрузить кабинет" else ""
+            if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
+        }
+    }
+    LaunchedEffect(Unit) { load() }
+    val c = cab
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 96.dp)) {
         Text("Аккаунт", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-        Text(if (sub == null) "Подписка не активна" else "Подписка активна", color = if (sub == null) Color(0xFFF87171) else Cyan, modifier = Modifier.padding(top = 8.dp))
-        Spacer(Modifier.height(12.dp))
-        Text(status, color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(16.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
-                .clickable {
-                    status = "открываю кабинет…"
-                    VpnLog.add("кнопка Открыть кабинет")
-                    openCabinet(ctx)
-                    status = "запрос отправлен, смотри лог в Настройках"
-                }.padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("Открыть кабинет", color = Color.White, fontWeight = FontWeight.SemiBold) }
-        Spacer(Modifier.height(12.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Elev)
-                .border(1.dp, Purple.copy(.5f), RoundedCornerShape(16.dp))
-                .clickable {
-                    status = "открываю Telegram…"
-                    VpnLog.add("кнопка Привязать Telegram")
-                    openCabinet(ctx)
-                    status = "запрос отправлен"
-                }.padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("🎁 Привязать Telegram", color = Color.White) }
-        if (!browser) {
-            Spacer(Modifier.height(16.dp))
-            Text("Браузер не найден, кабинет внутри приложения", color = Muted, fontSize = 12.sp)
-            AndroidView(
-                factory = { context -> cabinetWebView(context, "AccountWeb") },
-                modifier = Modifier.fillMaxWidth().weight(1f)
-            )
+        Text(c?.login ?: if (sub == null) "нет входа" else "подписка есть", color = Muted, modifier = Modifier.padding(top = 4.dp))
+        if (note.isNotBlank()) Text(note, color = if (c == null) Color(0xFFF87171) else Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+        if (c != null) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(18.dp)).background(Elev)
+                    .border(1.dp, Purple.copy(.45f), RoundedCornerShape(18.dp)).padding(16.dp)
+            ) {
+                Text(c.plan, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(if (c.status == "ACTIVE") "Подписка активна" else c.status, color = if (c.status == "ACTIVE") Cyan else Color(0xFFF87171), modifier = Modifier.padding(top = 4.dp))
+                Text("Осталось ${daysLeft(c.expires)}", color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+                Text("Трафик ${c.traffic}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                Text("Устройства ${c.devicesUsed} из ${c.deviceLimit}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+            if (c.offers.isNotEmpty()) {
+                Text("Продление", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+                c.offers.forEach { offer ->
+                    val on = offer.days == picked
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (on) Purple.copy(.35f) else Elev)
+                            .border(1.dp, if (on) Purple else Line, RoundedCornerShape(14.dp))
+                            .clickable { picked = offer.days }.padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("${offer.days} дней", color = Color.White)
+                        Text("${offer.price} ₽", color = Cyan, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
+                Box(
+                    Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Purple)
+                        .clickable(enabled = !paying) {
+                            paying = true
+                            note = "открываю оплату…"
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { Api.payRenewal(c.subscriptionId, offer.days, offer.price) }.getOrElse { it.message ?: "ошибка" }
+                                }
+                                paying = false
+                                if (result.startsWith("http")) {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                    note = "оплата открыта в браузере"
+                                } else note = result
+                            }
+                        }.padding(14.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(if (paying) "Открываю…" else "Оплатить ${offer.price} ₽", color = Color.White, fontWeight = FontWeight.SemiBold) }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(14.dp)).background(Elev)
+                    .clickable { if (c.telegram == null) openCabinet(ctx) }.padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(if (c.telegram != null) "🎁  Telegram" else "🎁  Привязать Telegram", color = Color.White)
+                Text(c.telegram?.let { "@$it" } ?: "открыть", color = Cyan, fontSize = 13.sp)
+            }
+            Text("Устройства", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+            c.devices.forEach { d ->
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp)).background(Elev).padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(d.title, color = Color.White, fontSize = 14.sp)
+                        Text(d.seen, color = Muted, fontSize = 12.sp)
+                    }
+                    Text(
+                        if (confirm == d.hwid) "Удалить" else "✕",
+                        color = Color(0xFFF87171),
+                        modifier = Modifier.clickable {
+                            if (confirm == d.hwid) {
+                                confirm = null
+                                scope.launch {
+                                    val ok = withContext(Dispatchers.IO) { Api.removeDevice(d.hwid) }
+                                    if (ok) load() else note = "не удалось удалить устройство"
+                                }
+                            } else confirm = d.hwid
+                        }.padding(8.dp)
+                    )
+                }
+            }
         }
     }
 }

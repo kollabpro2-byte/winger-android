@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import org.json.JSONArray
 import org.json.JSONObject
 import pro.wingerapp.vpn.Store
 import java.net.CookieManager
@@ -54,15 +55,18 @@ object Api {
         val usedRaw = o.optDouble("trafficUsed", o.optDouble("usedTraffic", 0.0))
         val limitRaw = o.optDouble("trafficLimit", o.optDouble("trafficLimitGb", 0.0))
         fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
+        val plan = o.optJSONObject("plan")
+        var limit = o.optInt("deviceLimit", 0)
+        if (limit <= 0) limit = planLimit(plan?.optString("id").orEmpty())
         return Sub(
-            name = o.optJSONObject("plan")?.optString("name") ?: "Подписка",
+            name = plan?.optString("name") ?: "Подписка",
             expires = o.optString("expiresAt", ""),
             url = o.optString("url", ""),
-            devices = o.optInt("deviceLimit", 0),
+            devices = limit,
             devicesUsed = devicesCount(),
             trafficUsedGb = gb(usedRaw),
             trafficLimitGb = gb(limitRaw),
-            unlimitedTraffic = o.optBoolean("unlimitedTraffic", limitRaw == 0.0)
+            unlimitedTraffic = o.isNull("trafficLimit") || o.optBoolean("unlimitedTraffic", limitRaw == 0.0)
         )
     }
 
@@ -75,6 +79,101 @@ object Api {
             else org.json.JSONObject(t).optJSONArray("devices")?.length()
                 ?: org.json.JSONObject(t).optJSONArray("items")?.length() ?: 0
         }.getOrDefault(0)
+    }
+
+    fun cabinet(): Cabinet? {
+        val me = get("$BASE/me")
+        val sub = get("$BASE/subscription")
+        if (me.first != 200 || sub.first != 200) return null
+        val user = JSONObject(me.second)
+        val o = JSONObject(sub.second)
+        val plan = o.optJSONObject("plan")
+        val planId = plan?.optString("id").orEmpty()
+        val offers = offersFor(planId)
+        var limit = o.optInt("deviceLimit", 0)
+        if (limit <= 0) limit = offers.limit
+        if (limit <= 0) limit = 4
+        val usedRaw = o.optDouble("trafficUsed", 0.0)
+        val limitRaw = o.optDouble("trafficLimit", 0.0)
+        fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
+        val used = "%.1f".format(gb(usedRaw)).replace('.', ',')
+        val total = if (o.isNull("trafficLimit") || limitRaw <= 0) "∞" else "%.0f ГБ".format(gb(limitRaw))
+        val linked = user.optString("telegramId").isNotBlank()
+        val devices = deviceList()
+        return Cabinet(
+            login = user.optJSONObject("webAccount")?.optString("login").orEmpty().ifBlank { "аккаунт" },
+            telegram = if (linked) user.optString("username").ifBlank { "привязан" } else null,
+            plan = plan?.optString("name") ?: "Подписка",
+            status = o.optString("status", ""),
+            expires = o.optString("expiresAt", ""),
+            traffic = "$used ГБ из $total",
+            devicesUsed = devices.size,
+            deviceLimit = limit,
+            subscriptionId = o.optString("id"),
+            offers = offers.items,
+            devices = devices
+        )
+    }
+
+    fun removeDevice(hwid: String): Boolean {
+        val (code, _) = call("DELETE", "$BASE/devices/${java.net.URLEncoder.encode(hwid, "UTF-8")}", null)
+        return code in 200..299
+    }
+
+    fun payRenewal(subscriptionId: String, days: Int, price: String): String {
+        val body = JSONObject()
+            .put("subscriptionIds", JSONArray().put(subscriptionId))
+            .put("gatewayType", "ANTILOPAY")
+            .put("expectedAmount", price)
+            .put("expectedCurrency", "RUB")
+            .put("source", "web")
+            .put("durations", JSONArray().put(JSONObject().put("subscriptionId", subscriptionId).put("days", days)))
+        val (code, text) = post("$BASE/payments/renewal-checkout", body.toString())
+        if (code !in 200..299) {
+            return runCatching { JSONObject(text).optString("message") }.getOrNull()?.ifBlank { null }
+                ?: "оплата не открылась ($code)"
+        }
+        val url = runCatching { JSONObject(text).optString("checkoutUrl") }.getOrDefault("")
+        return if (url.startsWith("http")) url else "ссылка оплаты не пришла"
+    }
+
+    private fun offersFor(planId: String): Offers {
+        val (code, text) = get("$BASE/plans")
+        if (code != 200 || text.isBlank()) return Offers(4, emptyList())
+        val arr = JSONArray(text)
+        for (i in 0 until arr.length()) {
+            val p = arr.getJSONObject(i)
+            if (planId.isNotBlank() && p.optString("id") != planId) continue
+            val items = mutableListOf<Offer>()
+            val durations = p.optJSONArray("durations") ?: JSONArray()
+            for (d in 0 until durations.length()) {
+                val dur = durations.getJSONObject(d)
+                val prices = dur.optJSONArray("prices") ?: continue
+                if (prices.length() == 0) continue
+                val price = prices.getJSONObject(0)
+                items += Offer(dur.optInt("days"), price.optString("price"), price.optString("currency", "RUB"))
+            }
+            return Offers(p.optInt("deviceLimit", 4), items)
+        }
+        return Offers(4, emptyList())
+    }
+
+    private fun planLimit(planId: String) = offersFor(planId).limit
+
+    private fun deviceList(): List<HwDevice> {
+        val (code, text) = get("$BASE/devices")
+        if (code != 200 || text.isBlank()) return emptyList()
+        val arr = runCatching {
+            val t = text.trim()
+            if (t.startsWith("[")) JSONArray(t) else JSONObject(t).optJSONArray("devices") ?: JSONArray()
+        }.getOrDefault(JSONArray())
+        return (0 until arr.length()).map { i ->
+            val d = arr.getJSONObject(i)
+            val agent = d.optString("userAgent").substringBefore("/").ifBlank { "Клиент" }
+            val platform = d.optString("platform").ifBlank { "Устройство" }
+            val seen = d.optString("lastSeenAt").replace("T", " ").take(16)
+            HwDevice(d.optString("hwid"), "$platform · $agent", seen)
+        }
     }
 
     fun fetchConfig(url: String, hwid: String): String = getSub(url, hwid, "sfa/1.11.0 Winger/1.0")
@@ -146,3 +245,19 @@ object Api {
 }
 
 data class Sub(val name: String, val expires: String, val url: String, val devices: Int, val devicesUsed: Int = 0, val trafficUsedGb: Double = 0.0, val trafficLimitGb: Double = 0.0, val unlimitedTraffic: Boolean = true)
+data class Offer(val days: Int, val price: String, val currency: String)
+data class HwDevice(val hwid: String, val title: String, val seen: String)
+data class Cabinet(
+    val login: String,
+    val telegram: String?,
+    val plan: String,
+    val status: String,
+    val expires: String,
+    val traffic: String,
+    val devicesUsed: Int,
+    val deviceLimit: Int,
+    val subscriptionId: String,
+    val offers: List<Offer>,
+    val devices: List<HwDevice>
+)
+private data class Offers(val limit: Int, val items: List<Offer>)
