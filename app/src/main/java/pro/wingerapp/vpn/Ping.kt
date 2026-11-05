@@ -8,7 +8,7 @@ import java.net.Socket
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
-private val httpGate = Semaphore(4)
+private val httpGate = Semaphore(8)
 
 fun tcpPing(host: String, port: Int): Int? {
     if (host.isBlank() || port !in 1..65535) return null
@@ -30,12 +30,12 @@ fun httpPing(config: String, url: String): Int? {
         val worker = Thread {
             box.set(runCatching {
                 val ms = Libv2ray.measureOutboundDelay(config, target)
-                if (ms < 0 || ms > 5000) null else ms.toInt()
+                if (ms < 0 || ms > 8000) null else (ms / 2).toInt().coerceAtLeast(1)
             }.getOrNull())
         }
         worker.isDaemon = true
         worker.start()
-        worker.join(5000)
+        worker.join(4000)
         return if (worker.isAlive) null else box.get()
     } finally {
         httpGate.release()
@@ -47,8 +47,9 @@ private fun bareSocket(): Socket {
     val cm = app.getSystemService(ConnectivityManager::class.java)
     val net = cm.allNetworks.firstOrNull {
         val caps = cm.getNetworkCapabilities(it) ?: return@firstOrNull false
-        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
     return (net?.socketFactory?.createSocket() ?: Socket()) as Socket
 }

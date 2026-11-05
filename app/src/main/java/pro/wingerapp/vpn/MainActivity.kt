@@ -331,7 +331,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                                     if (configs.isEmpty()) null
                                     else coroutineScope { configs.map { cfg -> async { httpPing(cfg, url) } }.awaitAll().filterNotNull().minOrNull() }
                                 } else {
-                                    val points = endpointsOf(body.raw, node.name)
+                                    val points = tcpEndpoints(body.raw, node.name)
                                     if (points.isEmpty()) null
                                     else coroutineScope { points.map { point -> async { tcpPing(point.host, point.port) } }.awaitAll().filterNotNull().minOrNull() }
                                 }
@@ -431,7 +431,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.31", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.32", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -494,10 +494,8 @@ private fun HomeTab(
                 Text(title, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                 nodes.forEach { node ->
                     val selected = place == node.name
-                    val own = if (pings.containsKey(node.name)) pings[node.name] else null
-                    val bestOther = pings.filterKeys { !it.contains("Автопилот", true) }.values.filterNotNull().minOrNull()
-                    val ms = if (node.name.contains("Автопилот", true)) listOfNotNull(own, bestOther).minOrNull() else own
-                    val waiting = ms == null && pinging && (node.name.contains("Автопилот", true) || !pings.containsKey(node.name))
+                    val ms = if (pings.containsKey(node.name)) pings[node.name] else null
+                    val waiting = pinging && !pings.containsKey(node.name)
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 3.dp)
                             .clip(RoundedCornerShape(14.dp))
@@ -510,10 +508,9 @@ private fun HomeTab(
                             Text(node.name, color = Color(0xFFE8EEF6), fontWeight = FontWeight.Normal, fontSize = 13.sp)
                             Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 10.sp)
                         }
-                        if (waiting || (ms == null && !pings.containsKey(node.name) && !node.name.contains("Автопилот", true))) {
-                            if (waiting) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
-                        } else {
-                            val ms = pings[node.name]
+                        if (waiting) {
+                            CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
+                        } else if (pings.containsKey(node.name)) {
                             val c = when { ms == null -> Color(0xFFF07171); ms < 120 -> Color(0xFF7EE0B0); ms < 200 -> Color(0xFFF0C14B); else -> Color(0xFFF07171) }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(6.dp).clip(CircleShape).background(c))
@@ -551,7 +548,10 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
         scope.launch {
             val c = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() }
             cab = c
-            if (c?.telegram != null) withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() } }
+            if (c?.telegram != null) {
+                val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
+                if (gift == "ok") note = "К подписке добавлены 3 дня"
+            }
             if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
         }
     }
@@ -566,9 +566,15 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 val fresh = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() } ?: return@repeat
                 cab = fresh
                 if (fresh.telegram != null) {
-                    withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() } }
+                    val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
                     load()
-                    note = "Telegram привязан, +3 дня начислены"
+                    note = when (gift) {
+                        "ok" -> "К подписке добавлены 3 дня"
+                        "done" -> "Telegram привязан. Бонус уже был получен"
+                        "wait" -> "Telegram привязан, но +3 дня ещё не начислены. Нажмите «Забрать»"
+                        "missing" -> "Telegram привязан. Задание +3 дня в кабинете не найдено"
+                        else -> "Telegram привязан. $gift"
+                    }
                     return@launch
                 }
             }
@@ -597,6 +603,21 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("TELEGRAM", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
                         Text("привязан", color = Color(0xFF86EFAC), fontSize = 13.sp)
+                    }
+                    Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
+                        scope.launch {
+                            val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
+                            note = when (gift) {
+                                "ok" -> "К подписке добавлены 3 дня"
+                                "done" -> "Бонус за Telegram уже получен"
+                                "wait" -> "Бонус ещё нельзя забрать. Откройте бота и нажмите снова"
+                                "missing" -> "Задание +3 дня в кабинете не найдено"
+                                else -> gift
+                            }
+                            if (gift == "ok") load()
+                        }
+                    }.padding(13.dp), contentAlignment = Alignment.Center) {
+                        Text("Забрать +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

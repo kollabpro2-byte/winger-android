@@ -257,20 +257,25 @@ object Api {
         return "https://t.me/$bot?start=link_$token"
     }
 
-    fun claimTelegramGift(): Boolean {
+    fun claimTelegramGift(): String {
         val (code, text) = get("$BASE/quests")
-        if (code != 200) return false
+        if (code != 200) return "не удалось проверить бонус ($code)"
         val arr = jsonList(text, "quests", "items")
         for (i in 0 until arr.length()) {
             val q = arr.optJSONObject(i) ?: continue
-            val kind = listOf("code", "action", "type", "key").firstNotNullOfOrNull { q.optString(it).ifBlank { null } }.orEmpty()
-            if (kind != "LINK_TELEGRAM" || !q.optBoolean("claimable")) continue
-            val id = q.optString("id")
-            if (id.isBlank()) continue
-            val (c, _) = post("$BASE/quests/$id/claim", "{}")
-            return c in 200..299
+            if (jsonText(q, "type") != "LINK_TELEGRAM") continue
+            val status = jsonText(q, "status").uppercase()
+            val claimable = q.optBoolean("claimable") || jsonText(q, "claimable") == "true"
+            if (!claimable) {
+                if (status in setOf("CLAIMED", "COMPLETED", "DONE", "REWARDED")) return "done"
+                return "wait"
+            }
+            val id = jsonText(q, "id")
+            if (id.isBlank()) return "не найден номер задания"
+            val (c, body) = call("POST", "$BASE/quests/$id/claim", null)
+            return if (c in 200..299) "ok" else apiError(c, body, "не удалось забрать +3 дня")
         }
-        return false
+        return "missing"
     }
 
     private fun thread(id: String): SupportThread {

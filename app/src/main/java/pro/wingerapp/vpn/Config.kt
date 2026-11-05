@@ -76,17 +76,21 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
 
 data class Endpoint(val host: String, val port: Int)
 
-fun endpointsOf(raw: String, server: String): List<Endpoint> {
+fun tcpEndpoints(raw: String, server: String): List<Endpoint> {
     val cfg = namedConfig(raw, server)
     val obs = cfg.optJSONArray("outbounds") ?: return emptyList()
     val found = mutableListOf<Endpoint>()
+    var proxies = 0
     for (i in 0 until obs.length()) {
         val outbound = obs.optJSONObject(i) ?: continue
         val proto = outbound.optString("protocol").lowercase()
-        if (proto in setOf("freedom", "blackhole", "dns", "loopback")) continue
+        if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
+        proxies++
+        val network = outbound.optJSONObject("streamSettings")?.optString("network").orEmpty().lowercase()
+        if (network in setOf("xhttp", "splithttp", "ws", "grpc", "h2", "http", "httpupgrade", "quic", "kcp")) continue
         collectEndpoints(outbound.optJSONObject("settings"), found)
     }
-    return found.distinct()
+    return if (proxies > 0 && found.isEmpty()) emptyList() else found.distinct()
 }
 
 fun delayConfigs(raw: String, server: String): List<String> {
