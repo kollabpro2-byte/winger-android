@@ -7,8 +7,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.provider.Settings
