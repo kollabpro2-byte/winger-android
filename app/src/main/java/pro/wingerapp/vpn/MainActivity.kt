@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -167,8 +168,33 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
     }
 }
 
+private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
+    if (hasChrome(ctx)) {
+        CustomTabsIntent.Builder()
+            .setShowTitle(true)
+            .build()
+            .launchUrl(ctx, Uri.parse(url))
+    }
+}
+
+private fun hasChrome(ctx: Context): Boolean {
+    return try {
+        ctx.packageManager.getPackageInfo("com.android.chrome", 0)
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
 @Composable
 private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
+    if (hasChrome(ctx)) {
+        LaunchedEffect(Unit) {
+            openCabinet(ctx)
+            onClose()
+        }
+        return
+    }
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("← Назад", color = Cyan, modifier = Modifier.clickable { onClose() }.padding(8.dp))
@@ -180,7 +206,7 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
                 WebView(context).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
-                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 14) WingerAndroid"
+                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             url ?: return false
@@ -318,7 +344,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.19", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.20", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -410,6 +436,27 @@ private fun HomeTab(
 
 @Composable
 private fun AccountTab(ctx: Context, sub: Sub?) {
+    if (hasChrome(ctx)) {
+        LaunchedEffect(Unit) { openCabinet(ctx) }
+        Column(Modifier.fillMaxSize().padding(20.dp)) {
+            Text("Аккаунт", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+            Text(if (sub == null) "Подписка не активна" else "Подписка активна", color = if (sub == null) Color(0xFFF87171) else Cyan, modifier = Modifier.padding(top = 8.dp))
+            Spacer(Modifier.height(20.dp))
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
+                    .clickable { openCabinet(ctx) }.padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Открыть кабинет", color = Color.White, fontWeight = FontWeight.SemiBold) }
+            Spacer(Modifier.height(12.dp))
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Elev)
+                    .border(1.dp, Purple.copy(.5f), RoundedCornerShape(16.dp))
+                    .clickable { openCabinet(ctx, "https://my.wingerapp.pro") }.padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("🎁 Привязать Telegram", color = Color.White) }
+        }
+        return
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Аккаунт", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -427,7 +474,7 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                 WebView(context).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
-                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 14) WingerAndroid"
+                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                             url ?: return false

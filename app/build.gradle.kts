@@ -11,7 +11,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.19"
+        versionName = "0.1.20"
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -27,5 +27,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.browser:browser:1.8.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
