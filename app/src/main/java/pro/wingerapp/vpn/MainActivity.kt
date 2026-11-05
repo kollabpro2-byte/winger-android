@@ -173,31 +173,28 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
 private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
     VpnLog.add("openCabinet: $url, chrome=${hasChrome(ctx)}")
     try {
-        val intent = CustomTabsIntent.Builder()
-            .setShowTitle(true)
-            .build()
-            .intent
-            .setData(Uri.parse(url))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val builder = CustomTabsIntent.Builder().setShowTitle(true)
+        val intent = builder.build().intent
+        intent.data = Uri.parse(url)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ctx.startActivity(intent)
         VpnLog.add("CustomTabs launched")
+        return
     } catch (e: Exception) {
         VpnLog.add("CustomTabs failed: ${e.message}")
-        try {
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            VpnLog.add("External browser launched")
-        } catch (e2: Exception) {
-            VpnLog.add("External browser failed: ${e2.message}")
-        }
+    }
+    try {
+        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        VpnLog.add("External browser launched")
+    } catch (e2: Exception) {
+        VpnLog.add("External browser failed: ${e2.message}")
     }
 }
 
 private fun hasChrome(ctx: Context): Boolean {
-    return try {
-        ctx.packageManager.getPackageInfo("com.android.chrome", 0)
-        true
-    } catch (_: Exception) {
-        false
+    val packages = listOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev", "com.google.android.apps.chrome")
+    return packages.any { pkg ->
+        try { ctx.packageManager.getPackageInfo(pkg, 0); true } catch (_: Exception) { false }
     }
 }
 
@@ -224,9 +221,13 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
                 factory = { context ->
                     WebView(context).apply {
                         setBackgroundColor(android.graphics.Color.WHITE)
+                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                        webChromeClient = android.webkit.WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 VpnLog.add("WebView start: $url")
@@ -376,7 +377,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.23", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.24", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -504,9 +505,13 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                 factory = { context ->
                     WebView(context).apply {
                         setBackgroundColor(android.graphics.Color.WHITE)
+                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                        webChromeClient = android.webkit.WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 VpnLog.add("AccountWeb start: $url")
