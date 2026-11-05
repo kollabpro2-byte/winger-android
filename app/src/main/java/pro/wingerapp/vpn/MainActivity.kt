@@ -169,6 +169,7 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
 }
 
 private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
+    VpnLog.add("openCabinet: $url, chrome=${hasChrome(ctx)}")
     try {
         val intent = CustomTabsIntent.Builder()
             .setShowTitle(true)
@@ -177,8 +178,15 @@ private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") 
             .setData(Uri.parse(url))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ctx.startActivity(intent)
-    } catch (_: Exception) {
-        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        VpnLog.add("CustomTabs launched")
+    } catch (e: Exception) {
+        VpnLog.add("CustomTabs failed: ${e.message}")
+        try {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            VpnLog.add("External browser launched")
+        } catch (e2: Exception) {
+            VpnLog.add("External browser failed: ${e2.message}")
+        }
     }
 }
 
@@ -218,8 +226,18 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
                         settings.domStorageEnabled = true
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                         webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                VpnLog.add("WebView start: $url")
+                            }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                VpnLog.add("WebView finished: $url")
+                            }
+                            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                                VpnLog.add("WebView error $errorCode: $description ($failingUrl)")
+                            }
                             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                 url ?: return false
+                                VpnLog.add("WebView navigate: $url")
                                 if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
                                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                                     return true
@@ -227,6 +245,7 @@ private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
                                 return false
                             }
                         }
+                        VpnLog.add("WebView loadUrl my.wingerapp.pro")
                         loadUrl("https://my.wingerapp.pro")
                     }
                 },
@@ -355,7 +374,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.21", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.22", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -473,8 +492,18 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                         settings.domStorageEnabled = true
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                         webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                VpnLog.add("AccountWeb start: $url")
+                            }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                VpnLog.add("AccountWeb finished: $url")
+                            }
+                            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                                VpnLog.add("AccountWeb error $errorCode: $description ($failingUrl)")
+                            }
                             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                 url ?: return false
+                                VpnLog.add("AccountWeb navigate: $url")
                                 if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
                                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                                     return true
@@ -482,6 +511,7 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                                 return false
                             }
                         }
+                        VpnLog.add("AccountWeb loadUrl")
                         injectCookies()
                         loadUrl("https://my.wingerapp.pro")
                     }
