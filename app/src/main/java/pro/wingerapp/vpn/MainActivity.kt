@@ -93,6 +93,11 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        VpnLog.init(this)
+        VpnLog.add("app start")
+        setContent { App(this, hwid(), ::connect, ::disconnect) }
+    }
+        super.onCreate(savedInstanceState)
         pro.wingerapp.vpn.net.Api.init(this)
         setContent { App(this, hwid(), ::connect, ::disconnect) }
     }
@@ -374,7 +379,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.22", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.23", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -466,24 +471,38 @@ private fun HomeTab(
 
 @Composable
 private fun AccountTab(ctx: Context, sub: Sub?) {
+    var status by remember { mutableStateOf("нажми кнопку, чтобы открыть кабинет") }
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Text("Аккаунт", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(if (sub == null) "Подписка не активна" else "Подписка активна", color = if (sub == null) Color(0xFFF87171) else Cyan, modifier = Modifier.padding(top = 8.dp))
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(12.dp))
+        Text(status, color = Muted, fontSize = 13.sp)
+        Spacer(Modifier.height(16.dp))
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
-                .clickable { openCabinet(ctx) }.padding(14.dp),
+                .clickable {
+                    status = "открываю кабинет…"
+                    VpnLog.add("кнопка Открыть кабинет")
+                    openCabinet(ctx)
+                    status = "запрос отправлен, смотри лог в Настройках"
+                }.padding(14.dp),
             contentAlignment = Alignment.Center
         ) { Text("Открыть кабинет", color = Color.White, fontWeight = FontWeight.SemiBold) }
         Spacer(Modifier.height(12.dp))
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Elev)
                 .border(1.dp, Purple.copy(.5f), RoundedCornerShape(16.dp))
-                .clickable { openCabinet(ctx) }.padding(14.dp),
+                .clickable {
+                    status = "открываю Telegram…"
+                    VpnLog.add("кнопка Привязать Telegram")
+                    openCabinet(ctx)
+                    status = "запрос отправлен"
+                }.padding(14.dp),
             contentAlignment = Alignment.Center
         ) { Text("🎁 Привязать Telegram", color = Color.White) }
         if (!hasChrome(ctx)) {
             Spacer(Modifier.height(16.dp))
+            Text("Chrome не найден, показываю WebView", color = Muted, fontSize = 12.sp)
             AndroidView(
                 factory = { context ->
                     WebView(context).apply {
