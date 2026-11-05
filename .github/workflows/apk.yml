@@ -30,7 +30,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ver=$(grep versionName app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-          cp app/build/outputs/apk/debug/app-debug.apk "winger-${ver}.apk"
-          gh release create "v${ver}" "winger-${ver}.apk" --title "Winger Android ${ver}" --notes "Custom Tabs first, WebView fallback" \
-            || gh release upload "v${ver}" "winger-${ver}.apk" --clobber
+          ver=$(sed -n 's/^[[:space:]]*versionName *= *"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
+          echo "version=${ver}"
+          test -n "$ver"
+          apk="winger-${ver}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          body=$(printf '{"tag_name":"v%s","name":"Winger Android %s","body":"Winger Android %s"}' "$ver" "$ver" "$ver")
+          code=$(curl -sS -o /tmp/rel.json -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
+            -d "$body")
+          echo "create ${code}"
+          cat /tmp/rel.json
+          if [ "$code" != "201" ]; then
+            code=$(curl -sS -o /tmp/rel.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/v${ver}")
+            echo "existing ${code}"
+            cat /tmp/rel.json
+          fi
+          test "$code" = "201" -o "$code" = "200"
+          upload=$(python3 -c 'import json; print(json.load(open("/tmp/rel.json"))["upload_url"].split("{")[0])')
+          curl -fS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary @"$apk" \
+            "${upload}?name=${apk}"
+
