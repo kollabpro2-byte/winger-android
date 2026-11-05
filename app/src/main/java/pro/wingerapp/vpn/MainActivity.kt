@@ -132,7 +132,10 @@ fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
         if (e == null) onOk() else err = e
     }
     if (showRegister) {
-        RegisterWeb(ctx) { showRegister = false }
+        RegisterForm(onClose = { showRegister = false }) { login, pass ->
+            Store.save(ctx, login, pass)
+            onOk()
+        }
         return
     }
     Column(Modifier.fillMaxSize().background(Bg).padding(24.dp), verticalArrangement = Arrangement.Center) {
@@ -219,29 +222,34 @@ private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") 
 }
 
 @Composable
-private fun RegisterWeb(ctx: Context, onClose: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("← Назад", color = Cyan, modifier = Modifier.clickable { onClose() }.padding(8.dp))
-            Spacer(Modifier.weight(1f))
-            Text("Регистрация", color = Color.White, fontWeight = FontWeight.SemiBold)
-        }
-        if (hasBrowser(ctx)) {
-            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-                Text("Регистрация откроется в браузере", color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(20.dp))
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
-                        .clickable { openCabinet(ctx) }.padding(14.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Открыть регистрацию", color = Color.White, fontWeight = FontWeight.SemiBold) }
-            }
-        } else {
-            AndroidView(
-                factory = { context -> cabinetWebView(context, "WebView") },
-                modifier = Modifier.fillMaxWidth().weight(1f)
-            )
-        }
+private fun RegisterForm(onClose: () -> Unit, onDone: (String, String) -> Unit) {
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize().background(Bg).padding(24.dp), verticalArrangement = Arrangement.Center) {
+        Text("← Назад", color = Cyan, modifier = Modifier.clickable { onClose() }.padding(bottom = 16.dp))
+        Text("Регистрация", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Аккаунт создаётся сразу, без браузера", color = Muted, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
+        Field(user, "Логин") { user = it }
+        Spacer(Modifier.height(10.dp))
+        Field(pass, "Пароль", true) { pass = it }
+        err?.let { Text(it, color = Color(0xFFF87171), modifier = Modifier.padding(top = 8.dp)) }
+        Spacer(Modifier.height(18.dp))
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Purple)
+                .clickable(enabled = !busy) {
+                    busy = true
+                    err = null
+                    scope.launch {
+                        val e = withContext(Dispatchers.IO) { runCatching { Api.register(user, pass) }.getOrElse { it.message } }
+                        busy = false
+                        if (e == null) onDone(user.trim(), pass) else err = e
+                    }
+                }.padding(14.dp),
+            contentAlignment = Alignment.Center
+        ) { Text(if (busy) "Создаю…" else "Создать аккаунт", color = Color.White, fontWeight = FontWeight.SemiBold) }
     }
 }
 
@@ -364,7 +372,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.26", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.27", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
@@ -459,6 +467,8 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("загружаю кабинет…") }
     var paying by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
+    var ways by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.PayWay>()) }
     var picked by remember { mutableStateOf(30) }
     var confirm by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -482,20 +492,20 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                     .border(1.dp, Purple.copy(.45f), RoundedCornerShape(18.dp)).padding(16.dp)
             ) {
                 Text(c.plan, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text(if (c.status == "ACTIVE") "Подписка активна" else c.status, color = if (c.status == "ACTIVE") Cyan else Color(0xFFF87171), modifier = Modifier.padding(top = 4.dp))
-                Text("Осталось ${daysLeft(c.expires)}", color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+                Text(if (c.status == "ACTIVE") "Подписка активна" else if (c.status == "NONE") "Подписки нет" else c.status, color = if (c.status == "ACTIVE") Cyan else Color(0xFFF87171), modifier = Modifier.padding(top = 4.dp))
+                if (c.expires.isNotBlank()) Text("Осталось ${daysLeft(c.expires)}", color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
                 Text("Трафик ${c.traffic}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
                 Text("Устройства ${c.devicesUsed} из ${c.deviceLimit}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
             }
             if (c.offers.isNotEmpty()) {
-                Text("Продление", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+                Text(if (c.subscriptionId.isBlank()) "Оплата" else "Продление", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
                 c.offers.forEach { offer ->
                     val on = offer.days == picked
                     Row(
                         Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp))
                             .background(if (on) Purple.copy(.35f) else Elev)
                             .border(1.dp, if (on) Purple else Line, RoundedCornerShape(14.dp))
-                            .clickable { picked = offer.days }.padding(horizontal = 14.dp, vertical = 12.dp),
+                            .clickable { picked = offer.days; choosing = false }.padding(horizontal = 14.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("${offer.days} дней", color = Color.White)
@@ -503,24 +513,45 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                     }
                 }
                 val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
-                Box(
-                    Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Purple)
-                        .clickable(enabled = !paying) {
-                            paying = true
-                            note = "открываю оплату…"
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    runCatching { Api.payRenewal(c.subscriptionId, offer.days, offer.price) }.getOrElse { it.message ?: "ошибка" }
+                if (!choosing) {
+                    Box(
+                        Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Purple)
+                            .clickable {
+                                scope.launch {
+                                    ways = withContext(Dispatchers.IO) { runCatching { Api.payWays() }.getOrDefault(emptyList()) }
+                                    choosing = true
                                 }
-                                paying = false
-                                if (result.startsWith("http")) {
-                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                    note = "оплата открыта в браузере"
-                                } else note = result
-                            }
-                        }.padding(14.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text(if (paying) "Открываю…" else "Оплатить ${offer.price} ₽", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                            }.padding(14.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Оплатить ${offer.price} ₽", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                } else {
+                    Text("Способ оплаты", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
+                    ways.forEach { way ->
+                        val amount = offer.amount(way.gateway)
+                        Column(
+                            Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp)).background(Elev)
+                                .border(1.dp, Purple.copy(.45f), RoundedCornerShape(14.dp))
+                                .clickable(enabled = !paying) {
+                                    paying = true
+                                    note = "открываю оплату…"
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            runCatching { Api.pay(c.subscriptionId, c.planId, offer.days, amount, way.gateway, way.autopay) }.getOrElse { it.message ?: "ошибка" }
+                                        }
+                                        paying = false
+                                        if (result.startsWith("http")) {
+                                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                            note = "оплата открыта в браузере"
+                                            choosing = false
+                                        } else note = result
+                                    }
+                                }.padding(14.dp)
+                        ) {
+                            Text(way.title, color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("$amount ₽ · ${way.hint}", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                        }
+                    }
+                }
             }
             Row(
                 Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(14.dp)).background(Elev)

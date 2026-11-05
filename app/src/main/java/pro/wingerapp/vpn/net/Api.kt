@@ -48,6 +48,19 @@ object Api {
         return null
     }
 
+    fun register(username: String, password: String): String? {
+        val name = username.trim()
+        if (!name.matches(Regex("^[a-zA-Z0-9_-]{3,32}$"))) return "Логин: 3–32 символа, латиница, цифры, _ и -"
+        if (password.length < 8 || password.length > 128) return "Пароль от 8 до 128 символов"
+        val body = JSONObject().put("username", name).put("passwordHash", sha256(password))
+        val docs = legalKeys()
+        if (docs.length() > 0) body.put("acceptedLegalDocuments", docs)
+        val (code, text) = post("$BASE/auth/register", body.toString())
+        if (code !in 200..299) return apiError(code, text, "Регистрация не прошла")
+        persist()
+        return login(name, password)
+    }
+
     fun subscription(): Sub? {
         val (code, text) = get("$BASE/subscription")
         if (code != 200 || text.isBlank() || text == "null") return null
@@ -83,33 +96,35 @@ object Api {
 
     fun cabinet(): Cabinet? {
         val me = get("$BASE/me")
-        val sub = get("$BASE/subscription")
-        if (me.first != 200 || sub.first != 200) return null
+        if (me.first != 200) return null
         val user = JSONObject(me.second)
-        val o = JSONObject(sub.second)
-        val plan = o.optJSONObject("plan")
+        val sub = get("$BASE/subscription")
+        val has = sub.first == 200 && sub.second.isNotBlank() && sub.second != "null"
+        val o = if (has) JSONObject(sub.second) else null
+        val plan = o?.optJSONObject("plan")
         val planId = plan?.optString("id").orEmpty()
         val offers = offersFor(planId)
-        var limit = o.optInt("deviceLimit", 0)
+        var limit = o?.optInt("deviceLimit", 0) ?: offers.limit
         if (limit <= 0) limit = offers.limit
         if (limit <= 0) limit = 4
-        val usedRaw = o.optDouble("trafficUsed", 0.0)
-        val limitRaw = o.optDouble("trafficLimit", 0.0)
+        val usedRaw = o?.optDouble("trafficUsed", 0.0) ?: 0.0
+        val limitRaw = o?.optDouble("trafficLimit", 0.0) ?: 0.0
         fun gb(v: Double) = if (v > 10000) v / 1024 / 1024 / 1024 else v
         val used = "%.1f".format(gb(usedRaw)).replace('.', ',')
-        val total = if (o.isNull("trafficLimit") || limitRaw <= 0) "∞" else "%.0f ГБ".format(gb(limitRaw))
+        val total = if (o == null || o.isNull("trafficLimit") || limitRaw <= 0) "∞" else "%.0f ГБ".format(gb(limitRaw))
         val linked = user.optString("telegramId").isNotBlank()
-        val devices = deviceList()
+        val devices = if (has) deviceList() else emptyList()
         return Cabinet(
             login = user.optJSONObject("webAccount")?.optString("login").orEmpty().ifBlank { "аккаунт" },
             telegram = if (linked) user.optString("username").ifBlank { "привязан" } else null,
-            plan = plan?.optString("name") ?: "Подписка",
-            status = o.optString("status", ""),
-            expires = o.optString("expiresAt", ""),
-            traffic = "$used ГБ из $total",
+            plan = plan?.optString("name")?.ifBlank { null } ?: offers.planName,
+            status = o?.optString("status").orEmpty().ifBlank { "NONE" },
+            expires = o?.optString("expiresAt").orEmpty(),
+            traffic = if (has) "$used ГБ из $total" else "нет подписки",
             devicesUsed = devices.size,
             deviceLimit = limit,
-            subscriptionId = o.optString("id"),
+            subscriptionId = o?.optString("id").orEmpty(),
+            planId = planId.ifBlank { offers.planId },
             offers = offers.items,
             devices = devices
         )
@@ -120,26 +135,49 @@ object Api {
         return code in 200..299
     }
 
-    fun payRenewal(subscriptionId: String, days: Int, price: String): String {
-        val body = JSONObject()
-            .put("subscriptionIds", JSONArray().put(subscriptionId))
-            .put("gatewayType", "ANTILOPAY")
-            .put("expectedAmount", price)
-            .put("expectedCurrency", "RUB")
-            .put("source", "web")
-            .put("durations", JSONArray().put(JSONObject().put("subscriptionId", subscriptionId).put("days", days)))
-        val (code, text) = post("$BASE/payments/renewal-checkout", body.toString())
-        if (code !in 200..299) {
-            return runCatching { JSONObject(text).optString("message") }.getOrNull()?.ifBlank { null }
-                ?: "оплата не открылась ($code)"
+    fun payWays(): List<PayWay> {
+        val (code, text) = get("$BASE/gateways")
+        val types = mutableSetOf<String>()
+        if (code == 200 && text.startsWith("[")) {
+            val arr = JSONArray(text)
+            for (i in 0 until arr.length()) types += arr.getJSONObject(i).optString("type")
         }
-        val url = runCatching { JSONObject(text).optString("checkoutUrl") }.getOrDefault("")
-        return if (url.startsWith("http")) url else "ссылка оплаты не пришла"
+        if (types.isEmpty()) types += listOf("ANTILOPAY", "PLATEGA")
+        val out = mutableListOf<PayWay>()
+        if ("ANTILOPAY" in types) {
+            out += PayWay("AntiloPay СБП с автосписанием", "по СБП, дальше списывается само", "ANTILOPAY", true)
+            out += PayWay("AntiloPay СБП", "разовая оплата через СБП", "ANTILOPAY", false)
+        }
+        if ("PLATEGA" in types) out += PayWay("Platega", "карты банков и СБП", "PLATEGA", false)
+        return out
+    }
+
+    fun pay(subscriptionId: String, planId: String, days: Int, price: String, gateway: String, autopay: Boolean): String {
+        val body = JSONObject().put("gatewayType", gateway).put("source", "web")
+        val url = if (subscriptionId.isNotBlank()) {
+            body.put("subscriptionIds", JSONArray().put(subscriptionId))
+                .put("expectedAmount", price)
+                .put("expectedCurrency", "RUB")
+                .put("durations", JSONArray().put(JSONObject().put("subscriptionId", subscriptionId).put("days", days)))
+            "$BASE/payments/renewal-checkout"
+        } else {
+            body.put("planId", planId).put("durationDays", days).put("purchaseType", "NEW")
+            "$BASE/payments/checkout"
+        }
+        if (autopay) {
+            body.put("savePaymentMethod", true)
+            body.put("savePaymentMethodConsent", true)
+            body.put("autopayMethod", "SBP")
+        }
+        val (code, text) = post(url, body.toString())
+        if (code !in 200..299) return apiError(code, text, "оплата не открылась")
+        val link = runCatching { JSONObject(text).optString("checkoutUrl") }.getOrDefault("")
+        return if (link.startsWith("http")) link else "ссылка оплаты не пришла"
     }
 
     private fun offersFor(planId: String): Offers {
         val (code, text) = get("$BASE/plans")
-        if (code != 200 || text.isBlank()) return Offers(4, emptyList())
+        if (code != 200 || text.isBlank()) return Offers(4, "", "Подписка", emptyList())
         val arr = JSONArray(text)
         for (i in 0 until arr.length()) {
             val p = arr.getJSONObject(i)
@@ -150,12 +188,47 @@ object Api {
                 val dur = durations.getJSONObject(d)
                 val prices = dur.optJSONArray("prices") ?: continue
                 if (prices.length() == 0) continue
-                val price = prices.getJSONObject(0)
-                items += Offer(dur.optInt("days"), price.optString("price"), price.optString("currency", "RUB"))
+                val map = linkedMapOf<String, String>()
+                var first = ""
+                var currency = "RUB"
+                for (n in 0 until prices.length()) {
+                    val price = prices.getJSONObject(n)
+                    val value = price.optString("price")
+                    val gateway = price.optString("gatewayType")
+                    if (gateway.isNotBlank() && value.isNotBlank()) map[gateway] = value
+                    if (first.isBlank()) {
+                        first = value
+                        currency = price.optString("currency", "RUB")
+                    }
+                }
+                items += Offer(dur.optInt("days"), map["ANTILOPAY"] ?: first, currency, map)
             }
-            return Offers(p.optInt("deviceLimit", 4), items)
+            return Offers(p.optInt("deviceLimit", 4), p.optString("id"), p.optString("name", "Подписка"), items)
         }
-        return Offers(4, emptyList())
+        return Offers(4, "", "Подписка", emptyList())
+    }
+
+    private fun legalKeys(): JSONArray {
+        val (code, text) = get("$BASE/legal-documents?locale=ru")
+        val out = JSONArray()
+        if (code != 200) return out
+        val docs = runCatching { JSONObject(text).optJSONArray("documents") }.getOrNull() ?: return out
+        for (i in 0 until docs.length()) {
+            val key = docs.getJSONObject(i).optString("key")
+            if (key.isNotBlank()) out.put(key)
+        }
+        return out
+    }
+
+    private fun apiError(code: Int, text: String, fallback: String): String {
+        val o = runCatching { JSONObject(text) }.getOrNull()
+        val kind = o?.optString("code").orEmpty()
+        return when (kind) {
+            "USERNAME_TAKEN" -> "Это имя уже занято"
+            "LEGAL_CONSENT_REQUIRED" -> "Нужно принять правила сервиса"
+            "AUTOPAY_NOT_AVAILABLE_FOR_PURCHASE", "AUTOPAY_NOT_AVAILABLE" -> "Для этого срока автосписание недоступно. Выберите 30, 90 или 365 дней"
+            else -> o?.optString("message")?.ifBlank { null } ?: "$fallback ($code)"
+        }
     }
 
     private fun planLimit(planId: String) = offersFor(planId).limit
@@ -245,7 +318,10 @@ object Api {
 }
 
 data class Sub(val name: String, val expires: String, val url: String, val devices: Int, val devicesUsed: Int = 0, val trafficUsedGb: Double = 0.0, val trafficLimitGb: Double = 0.0, val unlimitedTraffic: Boolean = true)
-data class Offer(val days: Int, val price: String, val currency: String)
+data class Offer(val days: Int, val price: String, val currency: String, val prices: Map<String, String> = emptyMap()) {
+    fun amount(gateway: String) = prices[gateway] ?: price
+}
+data class PayWay(val title: String, val hint: String, val gateway: String, val autopay: Boolean)
 data class HwDevice(val hwid: String, val title: String, val seen: String)
 data class Cabinet(
     val login: String,
@@ -257,7 +333,8 @@ data class Cabinet(
     val devicesUsed: Int,
     val deviceLimit: Int,
     val subscriptionId: String,
+    val planId: String,
     val offers: List<Offer>,
     val devices: List<HwDevice>
 )
-private data class Offers(val limit: Int, val items: List<Offer>)
+private data class Offers(val limit: Int, val planId: String, val planName: String, val items: List<Offer>)
