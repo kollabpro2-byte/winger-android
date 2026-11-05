@@ -17,6 +17,8 @@ import android.webkit.WebViewClient
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import libv2ray.Libv2ray
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -281,7 +283,10 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var ignoreGeo by remember { mutableStateOf(false) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
+    var up by remember { mutableStateOf("0 Б") }
+    var down by remember { mutableStateOf("0 Б") }
     val scope = rememberCoroutineScope()
+    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx))
     val reload: (Boolean) -> Unit = { ping ->
         scope.launch {
             if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
@@ -290,11 +295,20 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                     val s = Api.subscription()
                     sub = s
                     if (s != null && s.url.isNotBlank()) {
-                        val cfg = readHapp(Api.fetchHapp(s.url, hwid))
-                        raw = cfg.raw
-                        servers = cfg.servers
-                        if (place.isBlank()) place = cfg.servers.first().name
-                        if (ping) pings = cfg.servers.associate { it.name to tcpPing(it.host, it.port) }
+                        val body = readHapp(Api.fetchHapp(s.url, hwid))
+                        raw = body.raw
+                        servers = body.servers
+                        if (place.isBlank()) place = body.servers.first().name
+                        if (ping) {
+                            Libv2ray.initCoreEnv(ctx.filesDir.absolutePath, "")
+                            val http = Store.pingHttp(ctx)
+                            val url = Store.testUrl(ctx)
+                            val dns = Store.dnsServer(ctx)
+                            val direct = Store.bypass(ctx)
+                            pings = body.servers.associate { node ->
+                                node.name to if (http) httpPing(pingConfig(body.raw, node.name, ignoreGeo, dns, direct), url) else tcpPing(node.host, node.port)
+                            }
+                        }
                     }
                 }.onFailure { err = it.message }
             }
@@ -316,6 +330,11 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             val sec = ((System.currentTimeMillis() - startAt) / 1000).toInt()
             elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
             kotlinx.coroutines.delay(1000)
+            val tun = tunTraffic()
+            val rx = tun?.first ?: Store.coreDown(ctx)
+            val tx = tun?.second ?: Store.coreUp(ctx)
+            down = fmtBytes(rx)
+            up = fmtBytes(tx)
         }
     }
 
@@ -323,25 +342,27 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
         when (tab) {
             0 -> HomeTab(
                 ctx = ctx, hwid = hwid, sub = sub, servers = servers, pings = pings, place = place,
-                on = on, elapsed = elapsed, pinging = pinging, refreshing = refreshing, err = err,
+                on = on, elapsed = elapsed, up = up, down = down, pinging = pinging, refreshing = refreshing, err = err,
                 ignoreGeo = ignoreGeo, raw = raw, connect = connect, disconnect = disconnect, reload = reload,
                 onSelect = { name ->
                     place = name
-                    connect(xrayConfigFor(raw, name, ignoreGeo))
+                    connect(cfg(name))
                     on = true
                     Store.running(ctx, true)
                 },
                 onToggle = {
                     if (on) { disconnect(); on = false }
                     else if (raw.isNotBlank() && place.isNotBlank()) {
-                        connect(xrayConfigFor(raw, place, ignoreGeo))
+                        connect(cfg(place))
                         on = true
                         Store.running(ctx, true)
                     }
                 }
             )
             1 -> AccountTab(ctx, sub)
-            2 -> SettingsTab(ctx, ignoreGeo) { ignoreGeo = it }
+            2 -> SettingsTab(ctx, ignoreGeo, { ignoreGeo = it }) {
+                if (on && raw.isNotBlank() && place.isNotBlank()) connect(cfg(place))
+            }
         }
         Row(
             Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().height(60.dp)
@@ -365,23 +386,23 @@ private fun NavItem(label: String, active: Boolean, onClick: () -> Unit) {
 @Composable
 private fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
-    place: String, on: Boolean, elapsed: String, pinging: Boolean, refreshing: Boolean, err: String?,
+    place: String, on: Boolean, elapsed: String, up: String, down: String, pinging: Boolean, refreshing: Boolean, err: String?,
     ignoreGeo: Boolean, raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.27", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v0.1.28", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
             Text("Перейдите во вкладку Аккаунт", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
         }
         if (on) Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("↑ —", color = Color(0xFF7EE0B0), fontSize = 14.sp)
+            Text("↑ $up", color = Color(0xFF7EE0B0), fontSize = 14.sp)
             Text(elapsed, color = Muted, fontSize = 14.sp)
-            Text("↓ —", color = Color(0xFF9ECBFF), fontSize = 14.sp)
+            Text("↓ $down", color = Color(0xFF9ECBFF), fontSize = 14.sp)
         } else Spacer(Modifier.height(22.dp))
         if (!on) Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Text("нажмите на ", color = Color(0xFFC5D0DC), fontSize = 16.sp)
@@ -465,116 +486,114 @@ private fun HomeTab(
 @Composable
 private fun AccountTab(ctx: Context, sub: Sub?) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
-    var note by remember { mutableStateOf("загружаю кабинет…") }
+    var note by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var ways by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.PayWay>()) }
     var picked by remember { mutableStateOf(30) }
     var confirm by remember { mutableStateOf<String?>(null) }
+    var thread by remember { mutableStateOf<pro.wingerapp.vpn.net.SupportThread?>(null) }
+    var draft by remember { mutableStateOf("") }
+    var files by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.Attached>()) }
     val scope = rememberCoroutineScope()
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        scope.launch {
+            val added = withContext(Dispatchers.IO) { uris.mapNotNull { readAttachment(ctx, it) } }
+            files = files + added
+        }
+    }
     fun load() {
         scope.launch {
             val c = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() }
             cab = c
-            note = if (c == null) "не удалось загрузить кабинет" else ""
+            thread = withContext(Dispatchers.IO) { runCatching { Api.supportThread() }.getOrNull() }
             if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
         }
     }
     LaunchedEffect(Unit) { load() }
     val c = cab
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 96.dp)) {
-        Text("Аккаунт", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-        Text(c?.login ?: if (sub == null) "нет входа" else "подписка есть", color = Muted, modifier = Modifier.padding(top = 4.dp))
-        if (note.isNotBlank()) Text(note, color = if (c == null) Color(0xFFF87171) else Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("АККАУНТ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+            Text(c?.login ?: if (sub == null) "нет входа" else "…", color = Color.White, fontSize = 13.sp)
+        }
+        if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
         if (c != null) {
-            Column(
-                Modifier.fillMaxWidth().padding(top = 16.dp).clip(RoundedCornerShape(18.dp)).background(Elev)
-                    .border(1.dp, Purple.copy(.45f), RoundedCornerShape(18.dp)).padding(16.dp)
-            ) {
-                Text(c.plan, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text(if (c.status == "ACTIVE") "Подписка активна" else if (c.status == "NONE") "Подписки нет" else c.status, color = if (c.status == "ACTIVE") Cyan else Color(0xFFF87171), modifier = Modifier.padding(top = 4.dp))
-                if (c.expires.isNotBlank()) Text("Осталось ${daysLeft(c.expires)}", color = Color.White, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
-                Text("Трафик ${c.traffic}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-                Text("Устройства ${c.devicesUsed} из ${c.deviceLimit}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
+            Section {
+                Text("ПОДПИСКА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                Text(if (c.expires.isBlank()) "нет" else daysLeft(c.expires).substringBefore(" "), color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+                Text(c.plan, color = Color(0xFFC4B5FD), fontSize = 14.sp)
+                val active = c.status == "ACTIVE"
+                Text(if (active) "активна" else if (c.status == "NONE") "нет подписки" else c.status.lowercase(), color = if (active) Color(0xFF86EFAC) else Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp).clip(RoundedCornerShape(20.dp)).background(if (active) Color(0x2434C759) else Color(0x22F87171)).padding(horizontal = 10.dp, vertical = 4.dp))
+            }
+            Section {
+                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                    Column { Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 11.sp); Text("${c.devicesUsed} из ${c.deviceLimit}", color = Color.White, modifier = Modifier.padding(top = 4.dp)) }
+                    Column { Text("ТРАФИК", color = Color(0xFF7C8A9B), fontSize = 11.sp); Text(c.traffic, color = Color.White, modifier = Modifier.padding(top = 4.dp)) }
+                }
             }
             if (c.offers.isNotEmpty()) {
-                Text(if (c.subscriptionId.isBlank()) "Оплата" else "Продление", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
-                c.offers.forEach { offer ->
-                    val on = offer.days == picked
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp))
-                            .background(if (on) Purple.copy(.35f) else Elev)
-                            .border(1.dp, if (on) Purple else Line, RoundedCornerShape(14.dp))
-                            .clickable { picked = offer.days; choosing = false }.padding(horizontal = 14.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("${offer.days} дней", color = Color.White)
-                        Text("${offer.price} ₽", color = Cyan, fontWeight = FontWeight.SemiBold)
-                    }
-                }
                 val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
-                if (!choosing) {
-                    Box(
-                        Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Purple)
-                            .clickable {
-                                scope.launch {
-                                    ways = withContext(Dispatchers.IO) { runCatching { Api.payWays() }.getOrDefault(emptyList()) }
-                                    choosing = true
-                                }
-                            }.padding(14.dp),
-                        contentAlignment = Alignment.Center
-                    ) { Text("Оплатить ${offer.price} ₽", color = Color.White, fontWeight = FontWeight.SemiBold) }
-                } else {
-                    Text("Способ оплаты", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
-                    ways.forEach { way ->
+                Section {
+                    Text(if (c.subscriptionId.isBlank()) "ОПЛАТА" else "ПРОДЛЕНИЕ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("дни", color = Color(0xFF7C8A9B), fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                        c.offers.forEach { item ->
+                            val on = item.days == picked
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.22f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple.copy(.6f) else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                                Text("${item.days}", color = Color.White, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("цена", color = Color(0xFF7C8A9B), fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                        c.offers.forEach { item ->
+                            val on = item.days == picked
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.22f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple.copy(.6f) else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                                Text("${item.price} ₽", color = Color.White, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    if (!choosing) {
+                        Box(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
+                            scope.launch {
+                                ways = withContext(Dispatchers.IO) { runCatching { Api.payWays() }.getOrDefault(emptyList()) }
+                                choosing = true
+                            }
+                        }.padding(13.dp), contentAlignment = Alignment.Center) { Text("Продлить", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                    } else ways.forEach { way ->
                         val amount = offer.amount(way.gateway)
-                        Column(
-                            Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp)).background(Elev)
-                                .border(1.dp, Purple.copy(.45f), RoundedCornerShape(14.dp))
-                                .clickable(enabled = !paying) {
-                                    paying = true
-                                    note = "открываю оплату…"
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            runCatching { Api.pay(c.subscriptionId, c.planId, offer.days, amount, way.gateway, way.autopay) }.getOrElse { it.message ?: "ошибка" }
-                                        }
-                                        paying = false
-                                        if (result.startsWith("http")) {
-                                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                            note = "оплата открыта в браузере"
-                                            choosing = false
-                                        } else note = result
-                                    }
-                                }.padding(14.dp)
-                        ) {
-                            Text(way.title, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text("$amount ₽ · ${way.hint}", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                        Column(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = !paying) {
+                            paying = true
+                            note = ""
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) { runCatching { Api.pay(c.subscriptionId, c.planId, offer.days, amount, way.gateway, way.autopay) }.getOrElse { it.message ?: "ошибка" } }
+                                paying = false
+                                if (result.startsWith("http")) {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                    choosing = false
+                                } else note = result
+                            }
+                        }.padding(vertical = 8.dp)) {
+                            Text(way.title, color = Color.White)
+                            Text("$amount ₽ · ${way.hint}", color = Muted, fontSize = 12.sp)
                         }
                     }
                 }
             }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(14.dp)).background(Elev)
-                    .clickable { if (c.telegram == null) openCabinet(ctx) }.padding(14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(if (c.telegram != null) "🎁  Telegram" else "🎁  Привязать Telegram", color = Color.White)
-                Text(c.telegram?.let { "@$it" } ?: "открыть", color = Cyan, fontSize = 13.sp)
-            }
-            Text("Устройства", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
-            c.devices.forEach { d ->
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(14.dp)).background(Elev).padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(d.title, color = Color.White, fontSize = 14.sp)
-                        Text(d.seen, color = Muted, fontSize = 12.sp)
-                    }
-                    Text(
-                        if (confirm == d.hwid) "Удалить" else "✕",
-                        color = Color(0xFFF87171),
-                        modifier = Modifier.clickable {
+            Section {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(if (c.telegram != null) "Telegram" else "Telegram", color = Color.White)
+                    Text(c.telegram?.let { "@$it" } ?: "привязать", color = Cyan, fontSize = 13.sp, modifier = Modifier.clickable { if (c.telegram == null) openCabinet(ctx) })
+                }
+                Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+                c.devices.forEach { d ->
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(d.title, color = Color.White, fontSize = 14.sp)
+                            Text(d.seen, color = Muted, fontSize = 12.sp)
+                        }
+                        Text(if (confirm == d.hwid) "убрать" else "✕", color = Color(0xFFF87171), modifier = Modifier.clickable {
                             if (confirm == d.hwid) {
                                 confirm = null
                                 scope.launch {
@@ -582,39 +601,103 @@ private fun AccountTab(ctx: Context, sub: Sub?) {
                                     if (ok) load() else note = "не удалось удалить устройство"
                                 }
                             } else confirm = d.hwid
-                        }.padding(8.dp)
-                    )
+                        }.padding(8.dp))
+                    }
                 }
+            }
+            Section {
+                Text("ПОДДЕРЖКА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                thread?.lines?.takeLast(6)?.forEach { line ->
+                    Text("${line.author}: ${line.text}", color = if (line.author == "Вы") Color.White else Color(0xFFC4B5FD), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+                OutlinedTextField(draft, { draft = it }, placeholder = { Text("Напишите, что случилось") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 3, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("📎", fontSize = 20.sp, modifier = Modifier.clickable { pick.launch(arrayOf("image/png", "image/jpeg", "image/webp", "application/pdf")) }.padding(6.dp))
+                    files.forEach { Text(it.name, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp)) }
+                }
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable(enabled = !paying) {
+                    if (draft.isBlank() && files.isEmpty()) return@clickable
+                    paying = true
+                    scope.launch {
+                        val sent = draft
+                        val attached = files
+                        val err = withContext(Dispatchers.IO) { runCatching { Api.sendSupport(thread?.id, sent, attached) }.getOrElse { it.message } }
+                        paying = false
+                        if (err == null) { draft = ""; files = emptyList(); note = ""; load() } else note = err
+                    }
+                }.padding(13.dp), contentAlignment = Alignment.Center) { Text(if (paying) "Отправляю…" else "Отправить", color = Color.White, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
 }
 
 @Composable
-private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Unit) {
+private fun Section(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(22.dp)).background(Elev).border(1.dp, Line, RoundedCornerShape(22.dp)).padding(16.dp), content = content)
+}
+
+@Composable
+private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Unit, onApply: () -> Unit) {
     var log by remember { mutableStateOf(VpnLog.text()) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Text("Настройки", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-        Row(
-            Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(14.dp))
-                .background(if (ignoreGeo) Purple.copy(.35f) else Elev)
-                .clickable { onGeo(!ignoreGeo) }.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+    var http by remember { mutableStateOf(Store.pingHttp(ctx)) }
+    var url by remember { mutableStateOf(Store.testUrl(ctx)) }
+    var dns by remember { mutableStateOf(Store.dnsMode(ctx)) }
+    var custom by remember { mutableStateOf(Store.dnsCustom(ctx)) }
+    var hosts by remember { mutableStateOf(Store.bypass(ctx)) }
+    var site by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
+        Text("НАСТРОЙКИ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+        Text("ПРОВЕРКА ПИНГА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 18.dp))
+        Row(Modifier.padding(top = 8.dp)) {
+            Seg("TCP", !http, Modifier.weight(1f)) { http = false; Store.pingHttp(ctx, false) }
+            Seg("HTTP GET", http, Modifier.weight(1f)) { http = true; Store.pingHttp(ctx, true) }
+        }
+        Text("URL-ТЕСТ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        OutlinedTextField(url, { url = it; Store.testUrl(ctx, it) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+        Text("DNS", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        Row(Modifier.padding(top = 8.dp)) {
+            listOf("auto" to "Авто", "cf" to "1.1.1.1", "gg" to "8.8.8.8", "own" to "Свой").forEach { (id, label) ->
+                Seg(label, dns == id, Modifier.weight(1f)) { dns = id; Store.dnsMode(ctx, id); onApply() }
+            }
+        }
+        if (dns == "own") OutlinedTextField(custom, {
+            custom = it
+            Store.dnsCustom(ctx, it)
+            if (it.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) onApply()
+        }, placeholder = { Text("9.9.9.9") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+        Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+            Text("добавить", color = Color.White, modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
+                val host = site.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore("/")
+                if (host.isNotBlank() && host !in hosts) { hosts = hosts + host; Store.bypass(ctx, hosts); site = ""; onApply() }
+            }.padding(horizontal = 12.dp, vertical = 12.dp))
+        }
+        hosts.forEach { host ->
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(host, color = Color.White)
+                Text("убрать", color = Color(0xFFF87171), modifier = Modifier.clickable { hosts = hosts - host; Store.bypass(ctx, hosts); onApply() })
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(14.dp)).background(if (ignoreGeo) Purple.copy(.35f) else Elev).clickable { onGeo(!ignoreGeo) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (ignoreGeo) "Гео-базы игнорируются" else "Гео-базы включены", color = Color.White, modifier = Modifier.weight(1f))
             Text(if (ignoreGeo) "вкл" else "выкл", color = Cyan)
         }
-        Text("Лог подключения", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 20.dp))
+        Text("ЛОГ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Text(log.ifBlank { "пока пусто" }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Elev).clickable { log = VpnLog.text() }.padding(10.dp)) {
-                Text("Обновить", color = Color.White)
-            }
+            Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Elev).clickable { log = VpnLog.text() }.padding(10.dp)) { Text("Обновить", color = Color.White) }
             Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
                 ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
             }.padding(10.dp)) { Text("Скопировать", color = Color.White) }
         }
-        Spacer(Modifier.height(80.dp))
+    }
+}
+
+@Composable
+private fun Seg(label: String, on: Boolean, modifier: Modifier, click: () -> Unit) {
+    Box(modifier.padding(horizontal = 2.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.28f) else Elev).clickable { click() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+        Text(label, color = Color.White, fontSize = 12.sp)
     }
 }
 
@@ -720,3 +803,13 @@ private fun SiteParticles() {
         pts.forEachIndexed { i, pt -> drawCircle(colors[i % 3].copy(alpha = .7f), 3f, pt) }
     }
 }
+private fun readAttachment(ctx: Context, uri: Uri): pro.wingerapp.vpn.net.Attached? = runCatching {
+    val name = ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+        if (c.moveToFirst() && i >= 0) c.getString(i) else null
+    } ?: "file"
+    val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
+    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+    if (bytes.size > 8 * 1024 * 1024) return null
+    pro.wingerapp.vpn.net.Attached(name, mime, bytes)
+}.getOrNull()

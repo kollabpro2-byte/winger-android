@@ -20,7 +20,7 @@ fun readHapp(body: String): SubConfig {
     return SubConfig(body, servers)
 }
 
-fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false): String {
+fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: String? = null, directDomains: List<String> = emptyList()): String {
     val arr = JSONArray(raw)
     var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
     for (i in 0 until arr.length()) {
@@ -49,7 +49,50 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false): Stri
         routing.put("rules", JSONArray().put(rule))
         stripGeo(cfg)
     }
+    cfg.put("stats", JSONObject())
+    val policy = cfg.optJSONObject("policy") ?: JSONObject().also { cfg.put("policy", it) }
+    val system = policy.optJSONObject("system") ?: JSONObject()
+    system.put("statsOutboundUplink", true)
+    system.put("statsOutboundDownlink", true)
+    policy.put("system", system)
+    if (!dns.isNullOrBlank()) {
+        val dnsObj = cfg.optJSONObject("dns") ?: JSONObject().also { cfg.put("dns", it) }
+        dnsObj.put("servers", JSONArray().put(dns))
+    }
+    val extra = JSONArray()
+    directDomains.forEach { host ->
+        val clean = host.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore("/").substringBefore(":")
+        if (clean.isNotBlank()) extra.put("domain:$clean")
+    }
+    if (extra.length() > 0) {
+        ensureDirect(cfg)
+        val now = routing.optJSONArray("rules") ?: JSONArray()
+        val next = JSONArray().put(JSONObject().put("type", "field").put("outboundTag", "direct").put("domain", extra))
+        for (i in 0 until now.length()) next.put(now.get(i))
+        routing.put("rules", next)
+    }
     return cfg.toString()
+}
+
+fun pingConfig(raw: String, server: String, ignoreGeo: Boolean, dns: String?, directDomains: List<String>): String {
+    val cfg = JSONObject(xrayConfigFor(raw, server, ignoreGeo, dns, directDomains))
+    val inbounds = cfg.optJSONArray("inbounds") ?: return cfg.toString()
+    val keep = JSONArray()
+    for (i in 0 until inbounds.length()) {
+        val item = inbounds.optJSONObject(i)
+        if (item?.optString("tag") == "tun" || item?.optString("protocol") == "tun") continue
+        keep.put(inbounds.get(i))
+    }
+    cfg.put("inbounds", keep)
+    return cfg.toString()
+}
+
+private fun ensureDirect(cfg: JSONObject) {
+    val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray().also { cfg.put("outbounds", it) }
+    for (i in 0 until outbounds.length()) {
+        if (outbounds.optJSONObject(i)?.optString("tag") == "direct") return
+    }
+    outbounds.put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
 }
 
 private fun withRussianDirect(rules: JSONArray): JSONArray {

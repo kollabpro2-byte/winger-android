@@ -208,6 +208,58 @@ object Api {
         return Offers(4, "", "Подписка", emptyList())
     }
 
+    fun supportThread(): SupportThread {
+        val (code, text) = get("$BASE/support/tickets")
+        if (code != 200 || text.isBlank()) return SupportThread(null, emptyList())
+        val arr = runCatching {
+            val t = text.trim()
+            if (t.startsWith("[")) JSONArray(t) else JSONObject(t).optJSONArray("tickets") ?: JSONObject(t).optJSONArray("items") ?: JSONArray()
+        }.getOrDefault(JSONArray())
+        var id = ""
+        for (i in 0 until arr.length()) {
+            val t = arr.optJSONObject(i) ?: continue
+            if (t.optString("status") != "closed") { id = t.optString("id"); break }
+        }
+        if (id.isBlank() && arr.length() > 0) id = arr.optJSONObject(0)?.optString("id").orEmpty()
+        if (id.isBlank()) return SupportThread(null, emptyList())
+        return SupportThread(id, ticketLines(id))
+    }
+
+    fun sendSupport(ticketId: String?, message: String, files: List<Attached>): String? {
+        var id = ticketId
+        if (id.isNullOrBlank()) {
+            val subject = message.lineSequence().firstOrNull()?.take(60)?.ifBlank { null } ?: "Обращение из приложения"
+            val body = JSONObject().put("subject", subject).put("message", message.ifBlank { "вложение" })
+            val (code, text) = post("$BASE/support/tickets", body.toString())
+            if (code !in 200..299) return apiError(code, text, "тикет не создался")
+            id = runCatching { JSONObject(text).optString("id") }.getOrNull()
+            if (id.isNullOrBlank()) return "тикет создан без номера"
+        } else if (message.isNotBlank()) {
+            val (code, text) = post("$BASE/support/tickets/$id/reply", JSONObject().put("content", message).toString())
+            if (code !in 200..299) return apiError(code, text, "сообщение не ушло")
+        }
+        files.forEach { file ->
+            val payload = JSONObject()
+                .put("filename", file.name)
+                .put("mimeType", file.mime)
+                .put("dataBase64", android.util.Base64.encodeToString(file.bytes, android.util.Base64.NO_WRAP))
+            val (code, text) = post("$BASE/support/tickets/$id/attachments", payload.toString())
+            if (code !in 200..299) return apiError(code, text, "файл не прикрепился")
+        }
+        return null
+    }
+
+    private fun ticketLines(id: String): List<SupportLine> {
+        val (code, text) = get("$BASE/support/tickets/$id")
+        if (code != 200) return emptyList()
+        val messages = runCatching { JSONObject(text).optJSONArray("messages") }.getOrNull() ?: return emptyList()
+        return (0 until messages.length()).map { i ->
+            val m = messages.getJSONObject(i)
+            val mine = m.optString("authorType") == "user"
+            SupportLine(if (mine) "Вы" else "Поддержка", m.optString("content"))
+        }
+    }
+
     private fun legalKeys(): JSONArray {
         val (code, text) = get("$BASE/legal-documents?locale=ru")
         val out = JSONArray()
@@ -322,6 +374,9 @@ data class Offer(val days: Int, val price: String, val currency: String, val pri
     fun amount(gateway: String) = prices[gateway] ?: price
 }
 data class PayWay(val title: String, val hint: String, val gateway: String, val autopay: Boolean)
+data class SupportLine(val author: String, val text: String)
+data class SupportThread(val id: String?, val lines: List<SupportLine>)
+data class Attached(val name: String, val mime: String, val bytes: ByteArray)
 data class HwDevice(val hwid: String, val title: String, val seen: String)
 data class Cabinet(
     val login: String,

@@ -31,7 +31,19 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
                 Libv2ray.initCoreEnv(filesDir.absolutePath, "")
                 val ctl = Libv2ray.newCoreController(this)
                 core = ctl
+                val alive = java.util.concurrent.atomic.AtomicBoolean(true)
+                Thread {
+                    while (alive.get()) {
+                        if (ctl.isRunning) {
+                            val raw = runCatching { ctl.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
+                            val (down, up) = parseCoreTraffic(raw)
+                            if (down + up > 0) Store.coreTraffic(this, down, up)
+                        }
+                        Thread.sleep(1000)
+                    }
+                }.start()
                 ctl.startLoop(config, fd)
+                alive.set(false)
                 Store.running(this, true)
                 VpnLog.add("ядро запущено")
             } catch (e: Exception) {
@@ -62,7 +74,7 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
         b.addAddress("172.19.0.1", 30)
         b.addRoute("0.0.0.0", 0)
-        b.addDnsServer("1.1.1.1")
+        b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
         b.addDisallowedApplication(packageName)
         val cm = getSystemService(ConnectivityManager::class.java)
         cm.activeNetwork?.let { if (Build.VERSION.SDK_INT >= 22) b.setUnderlyingNetworks(arrayOf(it)) }
