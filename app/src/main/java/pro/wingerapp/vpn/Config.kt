@@ -30,7 +30,7 @@ fun readHapp(body: String): SubConfig {
     return SubConfig(body, servers)
 }
 
-fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: String? = null, directDomains: List<String> = emptyList(), useMux: Boolean = false, useFragment: Boolean = false, mtuLow: Boolean = false, useFakeDns: Boolean = false, useDoH: Boolean = false): String {
+fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: String? = null, directDomains: List<String> = emptyList(), useMux: Boolean = false, useFragment: Boolean = false, mtuLow: Boolean = false, useFakeDns: Boolean = false, useDoH: Boolean = false, rawMode: Boolean = false): String {
     val arr = JSONArray(raw)
     var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
     for (i in 0 until arr.length()) {
@@ -39,44 +39,46 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
     }
     cfg.remove("remarks")
     cfg.remove("meta")
-    val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
-    routing.put("domainStrategy", "IPIfNonMatch")
-    val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
-    mapKnown(cfg)
-    val routed = if (ignoreGeo) withoutGeo(rules) else withRussianDirect(rules)
-    routing.put("rules", routed)
-    if (ignoreGeo) {
-        val target = routing.optJSONArray("balancers")?.optJSONObject(0)?.optString("tag")
-        val rule = JSONObject().put("type", "field").put("inboundTag", JSONArray().put("tun"))
-        if (!target.isNullOrBlank()) rule.put("balancerTag", target)
-        else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
-        routing.put("rules", JSONArray().put(rule))
-        stripGeo(cfg)
-    }
-    cfg.put("stats", JSONObject())
-    val policy = cfg.optJSONObject("policy") ?: JSONObject().also { cfg.put("policy", it) }
-    val system = policy.optJSONObject("system") ?: JSONObject()
-    system.put("statsOutboundUplink", true)
-    system.put("statsOutboundDownlink", true)
-    policy.put("system", system)
-    if (!dns.isNullOrBlank()) {
-        val dnsObj = cfg.optJSONObject("dns") ?: JSONObject().also { cfg.put("dns", it) }
-        dnsObj.put("servers", JSONArray().put(dns))
-    }
-    val extra = JSONArray()
-    directDomains.forEach { host ->
-        val clean = host.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore("/").substringBefore(":")
-        if (clean.isNotBlank()) extra.put("domain:$clean")
-    }
-    if (extra.length() > 0) {
-        ensureDirect(cfg)
-        val now = routing.optJSONArray("rules") ?: JSONArray()
-        val next = JSONArray().put(JSONObject().put("type", "field").put("outboundTag", "direct").put("domain", extra))
-        for (i in 0 until now.length()) next.put(now.get(i))
-        routing.put("rules", next)
+    if (!rawMode) {
+        val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
+        routing.put("domainStrategy", "IPIfNonMatch")
+        val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
+        mapKnown(cfg)
+        val routed = if (ignoreGeo) withoutGeo(rules) else withRussianDirect(rules)
+        routing.put("rules", routed)
+        if (ignoreGeo) {
+            val target = routing.optJSONArray("balancers")?.optJSONObject(0)?.optString("tag")
+            val rule = JSONObject().put("type", "field").put("inboundTag", JSONArray().put("tun"))
+            if (!target.isNullOrBlank()) rule.put("balancerTag", target)
+            else rule.put("outboundTag", firstVless(cfg)?.optString("tag") ?: "proxy")
+            routing.put("rules", JSONArray().put(rule))
+            stripGeo(cfg)
+        }
+        cfg.put("stats", JSONObject())
+        val policy = cfg.optJSONObject("policy") ?: JSONObject().also { cfg.put("policy", it) }
+        val system = policy.optJSONObject("system") ?: JSONObject()
+        system.put("statsOutboundUplink", true)
+        system.put("statsOutboundDownlink", true)
+        policy.put("system", system)
+        if (!dns.isNullOrBlank()) {
+            val dnsObj = cfg.optJSONObject("dns") ?: JSONObject().also { cfg.put("dns", it) }
+            dnsObj.put("servers", JSONArray().put(dns))
+        }
+        val extra = JSONArray()
+        directDomains.forEach { host ->
+            val clean = host.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore("/").substringBefore(":")
+            if (clean.isNotBlank()) extra.put("domain:$clean")
+        }
+        if (extra.length() > 0) {
+            ensureDirect(cfg)
+            val now = routing.optJSONArray("rules") ?: JSONArray()
+            val next = JSONArray().put(JSONObject().put("type", "field").put("outboundTag", "direct").put("domain", extra))
+            for (i in 0 until now.length()) next.put(now.get(i))
+            routing.put("rules", next)
+        }
+        improveConnection(cfg, useMux, useFragment, useFakeDns, useDoH)
     }
     shiftLocalPorts(cfg, mtuLow)
-    improveConnection(cfg, useMux, useFragment, useFakeDns, useDoH)
     return cfg.toString()
 }
 

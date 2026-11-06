@@ -312,7 +312,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var up by remember { mutableStateOf("0 Б") }
     var down by remember { mutableStateOf("0 Б") }
     val scope = rememberCoroutineScope()
-    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx), Store.useMux(ctx), Store.useFragment(ctx), Store.mtuLow(ctx), Store.useFakeDns(ctx), Store.useDoH(ctx))
+    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx), Store.useMux(ctx), Store.useFragment(ctx), Store.mtuLow(ctx), Store.useFakeDns(ctx), Store.useDoH(ctx), Store.rawMode(ctx))
     val reload: (Boolean) -> Unit = { ping ->
         scope.launch {
             if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
@@ -712,22 +712,40 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 }
             }
             Section {
-                Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                c.devices.forEach { d ->
-                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(d.title, color = Color.White, fontSize = 14.sp)
-                            Text(d.seen, color = Muted, fontSize = 12.sp)
+                var devicesOpen by remember { mutableStateOf(true) }
+                Row(Modifier.fillMaxWidth().clickable { devicesOpen = !devicesOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(if (devicesOpen) "свернуть" else "развернуть", color = Cyan, fontSize = 12.sp)
+                }
+                if (devicesOpen) {
+                    c.devices.forEach { d ->
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(d.title, color = Color.White, fontSize = 14.sp)
+                                Text(d.seen, color = Muted, fontSize = 12.sp)
+                            }
+                            Text("удалить", color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.clickable { confirm = d.hwid }.padding(8.dp))
                         }
-                        Text(if (confirm == d.hwid) "убрать" else "✕", color = Color(0xFFF87171), modifier = Modifier.clickable {
-                            if (confirm == d.hwid) {
-                                confirm = null
-                                scope.launch {
-                                    val ok = withContext(Dispatchers.IO) { Api.removeDevice(d.hwid) }
-                                    if (ok) load() else note = "не удалось удалить устройство"
-                                }
-                            } else confirm = d.hwid
-                        }.padding(8.dp))
+                    }
+                }
+                if (confirm != null) {
+                    val target = c.devices.find { it.hwid == confirm }
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(.6f)).clickable { confirm = null }, contentAlignment = Alignment.Center) {
+                        Column(Modifier.padding(24.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Удалить устройство?", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Text(target?.title ?: "", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                            Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Нет", color = Color.White, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF1A2436)).clickable { confirm = null }.padding(horizontal = 20.dp, vertical = 10.dp))
+                                Text("Да", color = Color.White, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFFDC2626)).clickable {
+                                    val hwid = confirm
+                                    confirm = null
+                                    if (hwid != null) scope.launch {
+                                        val ok = withContext(Dispatchers.IO) { Api.removeDevice(hwid) }
+                                        if (ok) load() else note = "не удалось удалить устройство"
+                                    }
+                                }.padding(horizontal = 20.dp, vertical = 10.dp))
+                            }
+                        }
                     }
                 }
             }
@@ -995,6 +1013,11 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             Text("DNS DoH", color = Color.White, modifier = Modifier.weight(1f))
             Switch(doh, { doh = it; Store.useDoH(ctx, it); onApply() })
         }
+        var raw by remember { mutableStateOf(Store.rawMode(ctx)) }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Как в подписке", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(raw, { raw = it; Store.rawMode(ctx, it); onApply() })
+        }
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
@@ -1013,13 +1036,19 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             Text(if (ignoreGeo) "Гео-базы игнорируются" else "Гео-базы включены", color = Color.White, modifier = Modifier.weight(1f))
             Text(if (ignoreGeo) "вкл" else "выкл", color = Cyan)
         }
-        Text("ЛОГ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
-        Text(log.ifBlank { "пока пусто" }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Elev).clickable { log = VpnLog.text() }.padding(10.dp)) { Text("Обновить", color = Color.White) }
-            Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
-                ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
-            }.padding(10.dp)) { Text("Скопировать", color = Color.White) }
+        var logOpen by remember { mutableStateOf(false) }
+        Row(Modifier.fillMaxWidth().padding(top = 16.dp).clickable { logOpen = !logOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("ЛОГ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+            Text(if (logOpen) "свернуть" else "развернуть", color = Cyan, fontSize = 12.sp)
+        }
+        if (logOpen) {
+            Text(log.ifBlank { "пока пусто" }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Elev).clickable { log = VpnLog.text() }.padding(10.dp)) { Text("Обновить", color = Color.White) }
+                Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
+                    ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
+                }.padding(10.dp)) { Text("Скопировать", color = Color.White) }
+            }
         }
     }
 }

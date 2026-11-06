@@ -41,6 +41,8 @@ object Store {
     fun useFakeDns(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useFakeDns", on).apply() }
     fun useDoH(ctx: Context) = p(ctx).getBoolean("useDoH", false)
     fun useDoH(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useDoH", on).apply() }
+    fun rawMode(ctx: Context) = p(ctx).getBoolean("rawMode", false)
+    fun rawMode(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("rawMode", on).apply() }
     fun coreDown(ctx: Context) = p(ctx).getLong("coreDown", 0L)
     fun coreUp(ctx: Context) = p(ctx).getLong("coreUp", 0L)
     fun coreTraffic(ctx: Context, down: Long, up: Long) { p(ctx).edit().putLong("coreDown", down).putLong("coreUp", up).apply() }
