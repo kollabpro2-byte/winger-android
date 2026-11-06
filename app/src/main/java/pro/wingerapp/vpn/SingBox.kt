@@ -1,0 +1,71 @@
+package pro.wingerapp.vpn
+
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Convert Xray config to minimal sing-box config with TUN. */
+fun toSingBox(xrayJson: String): String {
+    val xray = JSONObject(xrayJson)
+    val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
+    val proxy = firstVless(outbounds) ?: return minimalTun()
+    val sb = JSONObject()
+    sb.put("log", JSONObject().put("level", "warn"))
+    sb.put("inbounds", JSONArray().put(JSONObject()
+        .put("type", "tun")
+        .put("tag", "tun-in")
+        .put("inet4_address", "172.19.0.1/30")
+        .put("auto_route", true)
+        .put("strict_route", false)
+        .put("sniff", true)
+        .put("sniff_override_destination", false)))
+    val sbOut = JSONArray()
+    sbOut.put(JSONObject().put("type", "direct").put("tag", "direct"))
+    sbOut.put(JSONObject().put("type", "block").put("tag", "block"))
+    sbOut.put(convertVless(proxy))
+    sb.put("outbounds", sbOut)
+    sb.put("route", JSONObject()
+        .put("auto_detect_interface", true)
+        .put("rules", JSONArray().put(JSONObject()
+            .put("outbound", "proxy")
+            .put("network", "tcp,udp"))))
+    return sb.toString()
+}
+
+private fun firstVless(obs: JSONArray): JSONObject? {
+    for (i in 0 until obs.length()) {
+        val o = obs.optJSONObject(i) ?: continue
+        if (o.optString("protocol").equals("vless", true)) return o
+    }
+    return null
+}
+
+private fun convertVless(xray: JSONObject): JSONObject {
+    val settings = xray.optJSONObject("settings") ?: JSONObject()
+    val vnext = settings.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
+    val users = vnext.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
+    val stream = xray.optJSONObject("streamSettings") ?: JSONObject()
+    val reality = stream.optJSONObject("realitySettings") ?: JSONObject()
+    val sb = JSONObject()
+    sb.put("type", "vless")
+    sb.put("tag", "proxy")
+    sb.put("server", vnext.optString("address"))
+    sb.put("server_port", vnext.optInt("port", 443))
+    sb.put("uuid", users.optString("id"))
+    sb.put("flow", users.optString("flow", ""))
+    if (stream.optString("security") == "reality") {
+        sb.put("tls", JSONObject()
+            .put("enabled", true)
+            .put("server_name", reality.optString("serverName"))
+            .put("utls", JSONObject().put("enabled", true).put("fingerprint", reality.optString("fingerprint", "chrome")))
+            .put("reality", JSONObject()
+                .put("enabled", true)
+                .put("public_key", reality.optString("publicKey"))
+                .put("short_id", reality.optString("shortId"))))
+    }
+    return sb
+}
+
+private fun minimalTun(): String = JSONObject()
+    .put("inbounds", JSONArray().put(JSONObject().put("type", "tun").put("tag", "tun-in").put("inet4_address", "172.19.0.1/30")))
+    .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
+    .toString()

@@ -11,6 +11,8 @@ import android.os.ParcelFileDescriptor
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
+import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.CommandServer
 import java.io.File
 
 class WingerVpnService : VpnService(), CoreCallbackHandler {
@@ -28,29 +30,12 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         stopCore()
         Thread {
             try {
-                VpnLog.add("старт Xray, конфиг ${config.length} байт")
+                val useSing = Store.core(this) == "singbox"
+                VpnLog.add("старт ${if (useSing) "sing-box" else "Xray"}, конфиг ${config.length} байт")
                 val fd = openTun()
                 if (generation.get() != gen) return@Thread
                 prepareAssets()
-                Libv2ray.initCoreEnv(filesDir.absolutePath, "")
-                val ctl = Libv2ray.newCoreController(this)
-                core = ctl
-                val alive = java.util.concurrent.atomic.AtomicBoolean(true)
-                Thread {
-                    while (alive.get() && generation.get() == gen) {
-                        if (ctl.isRunning) {
-                            val raw = runCatching { ctl.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
-                            val (down, up) = parseCoreTraffic(raw)
-                            if (down + up > 0) Store.coreTraffic(this, down, up)
-                        }
-                        Thread.sleep(1000)
-                    }
-                }.start()
-                ctl.startLoop(config, fd)
-                alive.set(false)
-                if (generation.get() != gen) return@Thread
-                Store.running(this, true)
-                VpnLog.add("ядро запущено")
+                if (useSing) startSingBox(config, fd, gen) else startXray(config, fd, gen)
             } catch (e: Exception) {
                 if (generation.get() != gen) return@Thread
                 VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
@@ -73,7 +58,47 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
     override fun onEmitStatus(code: Long, msg: String?): Long { VpnLog.add("xray: $msg"); return 0 }
 
     private fun stop(): Int { stopSelf(); return START_NOT_STICKY }
-    private fun stopCore() { runCatching { core?.stopLoop() }; tun?.close(); tun = null }
+    private var singServer: CommandServer? = null
+    private fun startXray(config: String, fd: Int, gen: Int) {
+        Libv2ray.initCoreEnv(filesDir.absolutePath, "")
+        val ctl = Libv2ray.newCoreController(this)
+        core = ctl
+        val alive = java.util.concurrent.atomic.AtomicBoolean(true)
+        Thread {
+            while (alive.get() && generation.get() == gen) {
+                if (ctl.isRunning) {
+                    val raw = runCatching { ctl.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
+                    val (down, up) = parseCoreTraffic(raw)
+                    if (down + up > 0) Store.coreTraffic(this, down, up)
+                }
+                Thread.sleep(1000)
+            }
+        }.start()
+        ctl.startLoop(config, fd)
+        alive.set(false)
+        if (generation.get() != gen) return
+        Store.running(this, true)
+        VpnLog.add("ядро запущено")
+    }
+    private fun startSingBox(config: String, fd: Int, gen: Int) {
+        Libbox.setup(filesDir.absolutePath, filesDir.absolutePath)
+        val sbConfig = toSingBox(config)
+        VpnLog.add("sing-box конфиг ${sbConfig.length} байт")
+        val server = Libbox.newCommandServer(null, null)
+        singServer = server
+        server.start()
+        server.startOrReloadService(sbConfig, null)
+        if (generation.get() != gen) return
+        Store.running(this, true)
+        VpnLog.add("ядро запущено")
+    }
+    private fun stopCore() { 
+        runCatching { core?.stopLoop() }
+        runCatching { singServer?.close() }
+        singServer = null
+        tun?.close()
+        tun = null 
+    }
 
     private fun openTun(): Int {
         if (prepare(this) != null) error("нет разрешения VPN")

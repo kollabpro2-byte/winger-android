@@ -16,6 +16,11 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-35 build-tools;35.0.0 platform-tools
+      - name: Download sing-box core
+        run: |
+          mkdir -p app/libs
+          curl -fsSL -o app/libs/libbox.aar "https://github.com/singbox-android/libbox/releases/download/1.14.4/libbox.aar"
+          ls -la app/libs/
       - name: Build APK
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
