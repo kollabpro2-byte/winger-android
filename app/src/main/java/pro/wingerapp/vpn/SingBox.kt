@@ -45,13 +45,23 @@ private fun convertVless(xray: JSONObject): JSONObject {
     val users = vnext.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
     val stream = xray.optJSONObject("streamSettings") ?: JSONObject()
     val reality = stream.optJSONObject("realitySettings") ?: JSONObject()
+    val network = stream.optString("network", "tcp")
     val sb = JSONObject()
     sb.put("type", "vless")
     sb.put("tag", "proxy")
     sb.put("server", vnext.optString("address"))
     sb.put("server_port", vnext.optInt("port", 443))
     sb.put("uuid", users.optString("id"))
-    sb.put("flow", users.optString("flow", ""))
+    val flow = users.optString("flow", "")
+    if (flow.isNotBlank() && network != "xhttp") sb.put("flow", flow)
+    if (network == "xhttp") {
+        val xhttp = stream.optJSONObject("xhttpSettings") ?: JSONObject()
+        val transport = JSONObject().put("type", "xhttp")
+        xhttp.optString("path").takeIf { it.isNotBlank() }?.let { transport.put("path", it) }
+        xhttp.optString("mode").takeIf { it.isNotBlank() }?.let { transport.put("mode", it) }
+        xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
+        sb.put("transport", transport)
+    }
     if (stream.optString("security") == "reality") {
         sb.put("tls", JSONObject()
             .put("enabled", true)
