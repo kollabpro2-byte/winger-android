@@ -20,6 +20,7 @@ jobs:
         run: |
           mkdir -p app/libs
           curl -fsSL -o app/libs/libbox.aar "https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.32/libbox-1.14.4-lx.32.aar"
+          python3 scripts/rewrite_libbox.py app/libs/libbox.aar
           ls -la app/libs/
       - name: Build APK
         run: |
@@ -63,4 +64,3 @@ jobs:
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @"$apk" \
             "${upload}?name=${apk}"
-
