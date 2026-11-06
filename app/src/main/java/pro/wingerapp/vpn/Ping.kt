@@ -1,19 +1,11 @@
 package pro.wingerapp.vpn
 
-import libv2ray.Libv2ray
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
 
-// Higher concurrency for faster full-list ping (IncY-style)
-private val coreGate = Semaphore(16)
-
-/**
- * TCP handshake time (fallback). IPv4 preferred — IPv6 often blackholes in RU.
- */
+/** TCP handshake time. IPv4 preferred — IPv6 often blackholes in RU. */
 fun tcpPing(host: String, port: Int): Int? {
     if (host.isBlank() || port !in 1..65535) return null
     val addresses = runCatching { InetAddress.getAllByName(host).toList() }.getOrNull() ?: return null
@@ -33,31 +25,5 @@ fun tcpPing(host: String, port: Int): Int? {
     return null
 }
 
-/**
- * Real delay through Xray core (measureOutboundDelay).
- * This is what IncY / v2rayNG use for accurate "working" servers.
- * Returns half the measured RTT (like many clients display) or null on failure.
- */
-fun httpPing(config: String, url: String): Int? {
-    if (!coreGate.tryAcquire(6, TimeUnit.SECONDS)) return null
-    try {
-        val target = url.trim().ifBlank { "https://www.gstatic.com/generate_204" }
-        val box = java.util.concurrent.atomic.AtomicReference<Int?>(null)
-        val worker = Thread {
-            box.set(runCatching {
-                val ms = Libv2ray.measureOutboundDelay(config, target)
-                when {
-                    ms < 0 -> null
-                    ms > 6000 -> null
-                    else -> (ms / 2).toInt().coerceAtLeast(1)
-                }
-            }.getOrNull())
-        }
-        worker.isDaemon = true
-        worker.start()
-        worker.join(3200)
-        return if (worker.isAlive) null else box.get()
-    } finally {
-        coreGate.release()
-    }
-}
+/** Xray delay probe is not in this build. Kept so call sites compile. */
+fun httpPing(config: String, url: String): Int? = null

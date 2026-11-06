@@ -10,8 +10,8 @@ android {
         applicationId = "pro.wingerapp.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 49
-        versionName = "0.1.49"
+        versionCode = 50
+        versionName = "0.1.50"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -35,7 +35,6 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
-    implementation(files("libs/libv2ray.aar"))
     implementation(files("libs/libbox.aar"))
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.activity:activity-compose:1.9.3")
