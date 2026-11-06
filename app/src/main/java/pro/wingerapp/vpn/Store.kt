@@ -43,6 +43,8 @@ object Store {
     fun useDoH(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useDoH", on).apply() }
     fun rawMode(ctx: Context) = p(ctx).getBoolean("rawMode", false)
     fun rawMode(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("rawMode", on).apply() }
+    fun core(ctx: Context) = p(ctx).getString("core", "xray").orEmpty()
+    fun core(ctx: Context, name: String) { p(ctx).edit().putString("core", name).apply() }
     fun coreDown(ctx: Context) = p(ctx).getLong("coreDown", 0L)
     fun coreUp(ctx: Context) = p(ctx).getLong("coreUp", 0L)
     fun coreTraffic(ctx: Context, down: Long, up: Long) { p(ctx).edit().putLong("coreDown", down).putLong("coreUp", up).apply() }

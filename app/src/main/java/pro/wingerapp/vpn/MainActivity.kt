@@ -1018,6 +1018,12 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             Text("Как в подписке", color = Color.White, modifier = Modifier.weight(1f))
             Switch(raw, { raw = it; Store.rawMode(ctx, it); onApply() })
         }
+        Text("ЯДРО", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        var core by remember { mutableStateOf(Store.core(ctx)) }
+        Row(Modifier.padding(top = 8.dp)) {
+            Seg("Xray", core == "xray", Modifier.weight(1f)) { core = "xray"; Store.core(ctx, "xray"); onApply() }
+            Seg("sing-box", core == "singbox", Modifier.weight(1f)) { core = "singbox"; Store.core(ctx, "singbox"); onApply() }
+        }
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
