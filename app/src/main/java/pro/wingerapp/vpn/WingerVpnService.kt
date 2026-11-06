@@ -8,16 +8,27 @@ import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import io.nekohasekai.libbox.CommandServer
+import io.nekohasekai.libbox.CommandServerHandler
+import io.nekohasekai.libbox.ExchangeContext
+import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.libbox.LocalDNSTransport
+import io.nekohasekai.libbox.NetworkInterfaceIterator
+import io.nekohasekai.libbox.OverrideOptions
+import io.nekohasekai.libbox.PlatformInterface
+import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.libbox.SystemProxyStatus
+import io.nekohasekai.libbox.TunOptions
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.CommandServer
 import java.io.File
+import java.net.InetAddress
 
 class WingerVpnService : VpnService(), CoreCallbackHandler {
     private var tun: ParcelFileDescriptor? = null
     private var core: CoreController? = null
+    private var singServer: CommandServer? = null
     private val generation = java.util.concurrent.atomic.AtomicInteger()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -32,10 +43,9 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
             try {
                 val useSing = Store.core(this) == "singbox"
                 VpnLog.add("старт ${if (useSing) "sing-box" else "Xray"}, конфиг ${config.length} байт")
-                val fd = openTun()
-                if (generation.get() != gen) return@Thread
                 prepareAssets()
-                if (useSing) startSingBox(config, fd, gen) else startXray(config, fd, gen)
+                if (generation.get() != gen) return@Thread
+                if (useSing) startSingBox(config, gen) else startXray(config, openTun(), gen)
             } catch (e: Exception) {
                 if (generation.get() != gen) return@Thread
                 VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
@@ -58,7 +68,7 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
     override fun onEmitStatus(code: Long, msg: String?): Long { VpnLog.add("xray: $msg"); return 0 }
 
     private fun stop(): Int { stopSelf(); return START_NOT_STICKY }
-    private var singServer: CommandServer? = null
+
     private fun startXray(config: String, fd: Int, gen: Int) {
         Libv2ray.initCoreEnv(filesDir.absolutePath, "")
         val ctl = Libv2ray.newCoreController(this)
@@ -80,24 +90,33 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         Store.running(this, true)
         VpnLog.add("ядро запущено")
     }
-    private fun startSingBox(config: String, fd: Int, gen: Int) {
-        Libbox.setup(filesDir.absolutePath, filesDir.absolutePath)
+
+    private fun startSingBox(config: String, gen: Int) {
+        val opts = SetupOptions()
+        opts.basePath = filesDir.absolutePath
+        opts.workingPath = filesDir.absolutePath
+        opts.tempPath = cacheDir.absolutePath
+        opts.fixAndroidStack = true
+        Libbox.setup(opts)
         val sbConfig = toSingBox(config)
         VpnLog.add("sing-box конфиг ${sbConfig.length} байт")
-        val server = Libbox.newCommandServer(null, null)
+        val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
         singServer = server
         server.start()
-        server.startOrReloadService(sbConfig, null)
+        server.startOrReloadService(sbConfig, OverrideOptions())
         if (generation.get() != gen) return
         Store.running(this, true)
         VpnLog.add("ядро запущено")
     }
-    private fun stopCore() { 
+
+    private fun stopCore() {
         runCatching { core?.stopLoop() }
+        runCatching { singServer?.closeService() }
         runCatching { singServer?.close() }
         singServer = null
+        core = null
         tun?.close()
-        tun = null 
+        tun = null
     }
 
     private fun openTun(): Int {
@@ -140,6 +159,63 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
             .createNotificationChannel(NotificationChannel(ch, "Winger", NotificationManager.IMPORTANCE_LOW))
         return Notification.Builder(this, ch).setContentTitle("Winger VPN").setContentText("Канал активен")
             .setSmallIcon(android.R.drawable.ic_lock_lock).build()
+    }
+
+    private inner class BoxPlatform : PlatformInterface {
+        override fun openTun(options: TunOptions): Int = openTun()
+        override fun autoDetectInterfaceControl(fd: Int) { protect(fd) }
+        override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+        override fun includeAllNetworks(): Boolean = false
+        override fun underNetworkExtension(): Boolean = false
+        override fun usePlatformBridge(): Boolean = false
+        override fun usePlatformShell(): Boolean = false
+        override fun tailscaleHostname(): String = ""
+        override fun clearDNSCache() {}
+        override fun registerMyInterface(name: String) {}
+        override fun cancelNotification(identifier: String, typeId: Int) {}
+        override fun checkPlatformShell() {}
+        override fun closeDefaultInterfaceMonitor(listener: io.nekohasekai.libbox.InterfaceUpdateListener) {}
+        override fun closeNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {}
+        override fun startDefaultInterfaceMonitor(listener: io.nekohasekai.libbox.InterfaceUpdateListener) {}
+        override fun startNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {}
+        override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {}
+        override fun readWIFIState(): io.nekohasekai.libbox.WIFIState? = null
+        override fun readSystemSSHHostKey(): String = ""
+        override fun lookupSFTPServer(): String = ""
+        override fun lookupUser(name: String): io.nekohasekai.libbox.PlatformUser? = null
+        override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions): io.nekohasekai.libbox.BridgeSession =
+            throw UnsupportedOperationException("bridge")
+        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): io.nekohasekai.libbox.ConnectionOwner? = null
+        override fun openShellSession(user: io.nekohasekai.libbox.PlatformUser, path: String, args: io.nekohasekai.libbox.StringIterator, dir: String, uid: Int, gid: Int): io.nekohasekai.libbox.ShellSession =
+            throw UnsupportedOperationException("shell")
+        override fun getInterfaces(): NetworkInterfaceIterator = object : NetworkInterfaceIterator {
+            override fun hasNext(): Boolean = false
+            override fun next(): io.nekohasekai.libbox.NetworkInterface = throw NoSuchElementException()
+        }
+        override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
+            override fun raw(): Boolean = false
+            override fun exchange(ctx: ExchangeContext, message: ByteArray) { ctx.errorCode(1) }
+            override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
+                val host = domain.trim().trimEnd('.')
+                val ip = runCatching { InetAddress.getAllByName(host).firstOrNull()?.hostAddress }.getOrNull()
+                if (ip.isNullOrBlank()) ctx.errorCode(1) else ctx.success(ip)
+            }
+        }
+    }
+
+    private inner class BoxHandler : CommandServerHandler {
+        override fun writeDebugMessage(message: String?) { if (!message.isNullOrBlank()) VpnLog.add("sing-box: $message") }
+        override fun serviceReload() {}
+        override fun serviceStop() { VpnLog.add("sing-box: service stop") }
+        override fun setSystemProxyEnabled(enabled: Boolean) {}
+        override fun connectSSHAgent(): Int = throw UnsupportedOperationException("ssh")
+        override fun triggerNativeCrash() {}
+        override fun getSystemProxyStatus(): SystemProxyStatus {
+            val status = SystemProxyStatus()
+            status.setAvailable(false)
+            status.setEnabled(false)
+            return status
+        }
     }
 
     companion object { const val EXTRA_CONFIG = "config" }
