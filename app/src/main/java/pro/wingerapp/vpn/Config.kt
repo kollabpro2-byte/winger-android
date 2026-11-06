@@ -7,7 +7,18 @@ data class ServerNode(val name: String, val host: String, val port: Int)
 data class SubConfig(val raw: String, val servers: List<ServerNode>)
 
 fun readHapp(body: String): SubConfig {
-    val arr = JSONArray(body)
+    val text = body.trim()
+    val source = when {
+        text.startsWith("[") -> text
+        text.startsWith("{") -> throw IllegalStateException("подписка пришла одним файлом, а не списком серверов")
+        else -> {
+            val decoded = runCatching {
+                String(android.util.Base64.decode(text, android.util.Base64.DEFAULT))
+            }.getOrNull()?.trim().orEmpty()
+            if (decoded.startsWith("[")) decoded else throw IllegalStateException("не удалось прочитать список серверов")
+        }
+    }
+    val arr = JSONArray(source)
     val servers = mutableListOf<ServerNode>()
     for (i in 0 until arr.length()) {
         val cfg = arr.optJSONObject(i) ?: continue

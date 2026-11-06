@@ -459,7 +459,7 @@ object Api {
         val ver = pro.wingerapp.vpn.BuildConfig.VERSION_NAME
         val c = open(url).apply {
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "Winger/$ver/Android")
+            setRequestProperty("User-Agent", "Happ/4.8.0/Android Winger/$ver")
             setRequestProperty("x-hwid", hwid)
             setRequestProperty("x-device-os", "Android")
             setRequestProperty("x-ver-os", Build.VERSION.RELEASE)

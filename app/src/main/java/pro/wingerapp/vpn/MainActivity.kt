@@ -326,7 +326,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         if (place.isBlank()) place = body.servers.first().name
                         body
                     } else null
-                }.onFailure { err = it.message }.getOrNull()
+                }.onFailure { err = it.message?.lineSequence()?.firstOrNull()?.take(140) ?: "не удалось обновить подписку" }.getOrNull()
             }?.let { body ->
                 if (!ping) {
                     notice = "Подписка обновлена"
@@ -492,7 +492,7 @@ private fun HomeTab(
             Text("    Трафик ", color = Muted, fontSize = 12.sp)
             Text(trafficText(sub), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
-        err?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+        err?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp, maxLines = 3, modifier = Modifier.padding(top = 6.dp)) }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (notice != null) Text(notice, color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).background(Color(0x2434C759)).padding(horizontal = 12.dp, vertical = 6.dp))
             else Spacer(Modifier.weight(1f))
@@ -845,39 +845,43 @@ private fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
         java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
     }.getOrNull()
     val trafficValue = c.traffic.substringAfter("из ", c.traffic).trim()
-    Box(
+    val trafficSize = if (trafficValue.length > 8) 22.sp else 34.sp
+    BoxWithConstraints(
         Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(22.dp))
             .background(Brush.linearGradient(listOf(Color(0xFFA78BFA), Color(0xFF9578F6), Color(0xFF7C5AEE), Color(0xFF6236C9), Color(0xFF4C1D95))))
     ) {
+        val narrow = maxWidth < 360.dp
         Flakes()
         Canvas(Modifier.matchParentSize()) {
             val r = 84.dp.toPx()
             drawCircle(Color.White.copy(.16f), r, Offset(size.width - 20.dp.toPx(), 40.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
             drawLine(Color.White.copy(.16f), Offset(size.width - 20.dp.toPx() - r, 40.dp.toPx()), Offset(size.width - 20.dp.toPx() + r, 40.dp.toPx()), 1.5.dp.toPx())
         }
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(if (narrow) 12.dp else 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BirdMark()
-                Text("Тариф ", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 6.dp))
-                Text(c.plan, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                    Text("Тариф", color = Color.White.copy(.85f), fontSize = 12.sp)
+                    Text(c.plan, color = Color.White, fontSize = if (narrow) 15.sp else 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
                 Row(
-                    Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0x8C24124E)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0x8C24124E)).padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(if (active) Color(0xFF3DFF7A) else Color(0xFFFF4D4D)))
-                    Text(if (active) "АКТИВНА" else "НЕАКТИВНА", color = Color.White, fontSize = 11.sp, letterSpacing = 0.8.sp, modifier = Modifier.padding(start = 6.dp))
+                    Text(if (active) "АКТИВНА" else "НЕАКТИВНА", color = Color.White, fontSize = 10.sp, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 22.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-                Column {
-                    Text("ТРАФИК", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp)
-                    Text(trafficValue, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Normal, lineHeight = 34.sp)
-                    Text("ОСТАЛОСЬ", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.8.sp, modifier = Modifier.padding(top = 8.dp))
-                    Text(if (days == null) "—" else "$days ${dayWord(days)}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text("ТРАФИК", color = Color.White, fontSize = if (narrow) 14.sp else 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp, maxLines = 1)
+                    Text(trafficValue, color = Color.White, fontSize = trafficSize, fontWeight = FontWeight.Normal, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("ОСТАЛОСЬ", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 8.dp), maxLines = 1)
+                    Text(if (days == null) "—" else "$days ${dayWord(days)}", color = Color.White, fontSize = if (narrow) 22.sp else 26.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("УСТРОЙСТВА", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.8.sp)
-                    Text("${c.devicesUsed} из ${c.deviceLimit}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Column(Modifier.widthIn(min = 96.dp), horizontalAlignment = Alignment.End) {
+                    Text("УСТРОЙСТВА", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.4.sp, maxLines = 1)
+                    Text("${c.devicesUsed} из ${c.deviceLimit}", color = Color.White, fontSize = if (narrow) 18.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
             }
         }
