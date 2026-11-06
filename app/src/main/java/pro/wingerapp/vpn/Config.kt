@@ -99,7 +99,10 @@ private fun shiftLocalPorts(cfg: JSONObject) {
         .put("tag", "tun")
         .put("protocol", "tun")
         .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
-        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
+        .put("sniffing", JSONObject()
+            .put("enabled", true)
+            .put("routeOnly", true)
+            .put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
 }
 
 data class Endpoint(val host: String, val port: Int)
@@ -122,10 +125,15 @@ fun tcpEndpoints(raw: String, server: String): List<Endpoint> {
 
 fun delayConfigs(raw: String, server: String): List<String> {
     val cfg = namedConfig(raw, server)
-    val proxies = vlessOutbounds(cfg).take(4)
+    val proxies = vlessOutbounds(cfg).take(3)
     return proxies.map { proxy ->
         val tagged = JSONObject(proxy.toString()).put("tag", "proxy")
+        // Light mux helps some Reality/xhttp paths (IncY-style)
+        if (!tagged.has("mux")) {
+            tagged.put("mux", JSONObject().put("enabled", true).put("concurrency", 8))
+        }
         JSONObject()
+            .put("log", JSONObject().put("loglevel", "none"))
             .put("outbounds", JSONArray().put(tagged).put(JSONObject().put("tag", "direct").put("protocol", "freedom")))
             .put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1")))
             .put("routing", JSONObject()
