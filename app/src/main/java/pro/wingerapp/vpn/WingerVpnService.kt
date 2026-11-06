@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import go.Seq
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.ExchangeContext
@@ -19,15 +20,11 @@ import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
-import libv2ray.CoreCallbackHandler
-import libv2ray.CoreController
-import libv2ray.Libv2ray
 import java.io.File
 import java.net.InetAddress
 
-class WingerVpnService : VpnService(), CoreCallbackHandler {
+class WingerVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
-    private var core: CoreController? = null
     private var singServer: CommandServer? = null
     private val generation = java.util.concurrent.atomic.AtomicInteger()
 
@@ -41,11 +38,10 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         stopCore()
         Thread {
             try {
-                val useSing = Store.core(this) == "singbox"
-                VpnLog.add("старт ${if (useSing) "sing-box" else "Xray"}, конфиг ${config.length} байт")
+                VpnLog.add("старт sing-box, конфиг ${config.length} байт")
                 prepareAssets()
                 if (generation.get() != gen) return@Thread
-                if (useSing) startSingBox(config, gen) else startXray(config, openTun(), gen)
+                startSingBox(config, gen)
             } catch (e: Exception) {
                 if (generation.get() != gen) return@Thread
                 VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
@@ -63,35 +59,11 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         stopSelf()
     }
     override fun onDestroy() { stopCore(); stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy() }
-    override fun startup(): Long = 0
-    override fun shutdown(): Long = 0
-    override fun onEmitStatus(code: Long, msg: String?): Long { VpnLog.add("xray: $msg"); return 0 }
 
     private fun stop(): Int { stopSelf(); return START_NOT_STICKY }
 
-    private fun startXray(config: String, fd: Int, gen: Int) {
-        Libv2ray.initCoreEnv(filesDir.absolutePath, "")
-        val ctl = Libv2ray.newCoreController(this)
-        core = ctl
-        val alive = java.util.concurrent.atomic.AtomicBoolean(true)
-        Thread {
-            while (alive.get() && generation.get() == gen) {
-                if (ctl.isRunning) {
-                    val raw = runCatching { ctl.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
-                    val (down, up) = parseCoreTraffic(raw)
-                    if (down + up > 0) Store.coreTraffic(this, down, up)
-                }
-                Thread.sleep(1000)
-            }
-        }.start()
-        ctl.startLoop(config, fd)
-        alive.set(false)
-        if (generation.get() != gen) return
-        Store.running(this, true)
-        VpnLog.add("ядро запущено")
-    }
-
     private fun startSingBox(config: String, gen: Int) {
+        Seq.setContext(applicationContext)
         val opts = SetupOptions()
         opts.basePath = filesDir.absolutePath
         opts.workingPath = filesDir.absolutePath
@@ -110,11 +82,9 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
     }
 
     private fun stopCore() {
-        runCatching { core?.stopLoop() }
         runCatching { singServer?.closeService() }
         runCatching { singServer?.close() }
         singServer = null
-        core = null
         tun?.close()
         tun = null
     }
