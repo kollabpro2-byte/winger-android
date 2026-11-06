@@ -80,24 +80,16 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
     return cfg.toString()
 }
 
-/** Real connection tweaks that affect whether the tunnel actually works (IncY-like). */
+/** Real connection tweaks. Mux is OFF by default (matches IncY use_mux=false).
+ *  Forced Mux breaks some VLESS+Vision/Reality servers. */
 private fun improveConnection(cfg: JSONObject) {
-    // 1. Light Mux on VLESS outbounds — helps some Reality / xhttp paths stay up
-    val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
-    for (i in 0 until outbounds.length()) {
-        val o = outbounds.optJSONObject(i) ?: continue
-        if (!o.optString("protocol").equals("vless", true)) continue
-        if (!o.has("mux")) {
-            o.put("mux", JSONObject().put("enabled", true).put("concurrency", 8))
-        }
-    }
-
-    // 2. Ensure DNS exists (prefer 1.1.1.1 if none set)
+    // Ensure DNS exists — prefer DoH-style fallback like IncY (8.8.8.8)
     if (cfg.optJSONObject("dns") == null) {
-        cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
+        cfg.put("dns", JSONObject().put("servers", JSONArray()
+            .put("https://8.8.8.8/dns-query")
+            .put("8.8.8.8")
+            .put("1.1.1.1")))
     }
-
-    // 3. domainStrategy already set to IPIfNonMatch above — keep it
 }
 
 /** Keep the subscription inbounds and routing. Only move local proxy ports off the range IncY occupies. */
@@ -149,10 +141,6 @@ fun delayConfigs(raw: String, server: String): List<String> {
     val proxies = vlessOutbounds(cfg).take(3)
     return proxies.map { proxy ->
         val tagged = JSONObject(proxy.toString()).put("tag", "proxy")
-        // Light mux helps some Reality/xhttp paths (IncY-style)
-        if (!tagged.has("mux")) {
-            tagged.put("mux", JSONObject().put("enabled", true).put("concurrency", 8))
-        }
         JSONObject()
             .put("log", JSONObject().put("loglevel", "none"))
             .put("outbounds", JSONArray().put(tagged).put(JSONObject().put("tag", "direct").put("protocol", "freedom")))

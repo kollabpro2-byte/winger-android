@@ -16,7 +16,7 @@ object Store {
     fun cookies(ctx: Context, raw: String) { p(ctx).edit().putString("cookies", raw).apply() }
     fun pingHttp(ctx: Context) = p(ctx).getBoolean("pingHttp", true)
     fun pingHttp(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("pingHttp", on).apply() }
-    fun testUrl(ctx: Context) = p(ctx).getString("testUrl", "https://www.gstatic.com/generate_204").orEmpty()
+    fun testUrl(ctx: Context) = p(ctx).getString("testUrl", "https://youtube.com").orEmpty()
     fun testUrl(ctx: Context, url: String) { p(ctx).edit().putString("testUrl", url).apply() }
     fun dnsMode(ctx: Context) = p(ctx).getString("dnsMode", "auto").orEmpty()
     fun dnsMode(ctx: Context, mode: String) { p(ctx).edit().putString("dnsMode", mode).apply() }
