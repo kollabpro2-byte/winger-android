@@ -896,7 +896,7 @@ private fun BirdMark() {
 }
 
 @Composable
-private fun Flakes() {
+private fun BoxScope.Flakes() {
     val t by rememberInfiniteTransition(label = "flakes").animateFloat(0f, 1f, infiniteRepeatable(tween(16000, easing = LinearEasing)), label = "f")
     Canvas(Modifier.matchParentSize()) {
         listOf(0.08f to 1.5f, 0.22f to 2.5f, 0.38f to 1.5f, 0.54f to 2f, 0.68f to 1.5f, 0.8f to 3f, 0.9f to 1.5f).forEachIndexed { i, (x, r) ->
