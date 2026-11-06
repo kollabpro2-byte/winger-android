@@ -76,7 +76,28 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
         routing.put("rules", next)
     }
     shiftLocalPorts(cfg)
+    improveConnection(cfg)
     return cfg.toString()
+}
+
+/** Real connection tweaks that affect whether the tunnel actually works (IncY-like). */
+private fun improveConnection(cfg: JSONObject) {
+    // 1. Light Mux on VLESS outbounds — helps some Reality / xhttp paths stay up
+    val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
+    for (i in 0 until outbounds.length()) {
+        val o = outbounds.optJSONObject(i) ?: continue
+        if (!o.optString("protocol").equals("vless", true)) continue
+        if (!o.has("mux")) {
+            o.put("mux", JSONObject().put("enabled", true).put("concurrency", 8))
+        }
+    }
+
+    // 2. Ensure DNS exists (prefer 1.1.1.1 if none set)
+    if (cfg.optJSONObject("dns") == null) {
+        cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
+    }
+
+    // 3. domainStrategy already set to IPIfNonMatch above — keep it
 }
 
 /** Keep the subscription inbounds and routing. Only move local proxy ports off the range IncY occupies. */
