@@ -12,9 +12,8 @@ fun readHapp(body: String): SubConfig {
     for (i in 0 until arr.length()) {
         val cfg = arr.optJSONObject(i) ?: continue
         val name = cfg.optString("remarks").ifBlank { "Сервер ${i + 1}" }
-        val vless = firstVless(cfg)
-        val vn = vless?.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0)
-        servers += ServerNode(name, vn?.optString("address").orEmpty(), vn?.optInt("port", 443) ?: 443)
+        val point = firstEndpoint(cfg)
+        servers += ServerNode(name, point?.host.orEmpty(), point?.port ?: 443)
     }
     if (servers.isEmpty()) error("в подписке нет серверов")
     return SubConfig(body, servers)
@@ -80,17 +79,16 @@ fun tcpEndpoints(raw: String, server: String): List<Endpoint> {
     val cfg = namedConfig(raw, server)
     val obs = cfg.optJSONArray("outbounds") ?: return emptyList()
     val found = mutableListOf<Endpoint>()
-    var proxies = 0
     for (i in 0 until obs.length()) {
         val outbound = obs.optJSONObject(i) ?: continue
         val proto = outbound.optString("protocol").lowercase()
         if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
-        proxies++
-        // TCP ping is just the socket connect time to the server address:port,
-        // same as v2rayNG / INCY. Works for any transport (including xhttp/splithttp).
-        collectEndpoints(outbound.optJSONObject("settings"), found)
+        // Whole outbound, not only settings: xhttp/splithttp still connect to address:port.
+        val before = found.size
+        collectEndpoints(outbound, found)
+        if (found.size == before) found += looseEndpoints(outbound)
     }
-    return if (proxies > 0 && found.isEmpty()) emptyList() else found.distinct()
+    return found.distinct()
 }
 
 fun delayConfigs(raw: String, server: String): List<String> {
@@ -139,12 +137,63 @@ private fun hasAddress(outbound: JSONObject): Boolean {
     return false
 }
 
+private fun jsonPort(node: JSONObject): Int {
+    val raw = node.opt("port")
+    return when (raw) {
+        is Number -> raw.toInt()
+        is String -> raw.trim().toIntOrNull() ?: 0
+        else -> 0
+    }
+}
+
+private fun endpointHost(node: JSONObject): String =
+    node.optString("address").ifBlank { node.optString("host") }.ifBlank { node.optString("server") }
+
+private fun usableHost(host: String): Boolean =
+    host.isNotBlank() && host != "0.0.0.0" && host != "127.0.0.1" && !host.contains("://") && !host.startsWith("geo") && !host.contains(" ")
+
+private fun firstEndpoint(cfg: JSONObject): Endpoint? {
+    val obs = cfg.optJSONArray("outbounds") ?: return null
+    for (i in 0 until obs.length()) {
+        val outbound = obs.optJSONObject(i) ?: continue
+        val proto = outbound.optString("protocol").lowercase()
+        if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
+        val found = mutableListOf<Endpoint>()
+        collectEndpoints(outbound, found)
+        if (found.isEmpty()) found += looseEndpoints(outbound)
+        if (found.isNotEmpty()) return found.first()
+    }
+    return null
+}
+
+/** Address and port live on different objects (port only on the outbound). */
+private fun looseEndpoints(outbound: JSONObject): List<Endpoint> {
+    val hosts = mutableListOf<String>()
+    val ports = mutableListOf<Int>()
+    fun walk(node: Any?) {
+        when (node) {
+            is JSONObject -> {
+                val host = endpointHost(node)
+                if (usableHost(host)) hosts += host
+                val port = jsonPort(node)
+                if (port in 1..65535) ports += port
+                val keys = node.keys()
+                while (keys.hasNext()) walk(node.opt(keys.next()))
+            }
+            is JSONArray -> for (i in 0 until node.length()) walk(node.opt(i))
+        }
+    }
+    walk(outbound)
+    val port = ports.firstOrNull() ?: 443
+    return hosts.distinct().map { Endpoint(it, port) }
+}
+
 private fun collectEndpoints(node: Any?, out: MutableList<Endpoint>) {
     when (node) {
         is JSONObject -> {
-            val host = node.optString("address").ifBlank { node.optString("host") }
-            val port = node.optInt("port", 0)
-            if (host.isNotBlank() && port in 1..65535 && host != "0.0.0.0" && host != "127.0.0.1" && !host.contains("://") && !host.startsWith("geo")) {
+            val host = endpointHost(node)
+            val port = jsonPort(node)
+            if (usableHost(host) && port in 1..65535) {
                 out += Endpoint(host, port)
             }
             val keys = node.keys()

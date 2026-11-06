@@ -10,8 +10,8 @@ android {
         applicationId = "pro.wingerapp.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.1.34"
+        versionCode = 35
+        versionName = "0.1.35"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -24,7 +24,10 @@ android {
             keyPassword = "android"
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

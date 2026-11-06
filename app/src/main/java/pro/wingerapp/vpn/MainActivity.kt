@@ -331,9 +331,11 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                                     if (configs.isEmpty()) null
                                     else coroutineScope { configs.map { cfg -> async { httpPing(cfg, url) } }.awaitAll().filterNotNull().minOrNull() }
                                 } else {
-                                    val points = tcpEndpoints(body.raw, node.name)
+                                    val points = tcpEndpoints(body.raw, node.name).ifEmpty {
+                                        listOf(Endpoint(node.host, if (node.port in 1..65535) node.port else 443))
+                                    }.filter { it.host.isNotBlank() && it.port in 1..65535 }
                                     if (points.isEmpty()) -1
-                                    else coroutineScope { points.map { point -> async { tcpPing(point.host, point.port) } }.awaitAll().filterNotNull().minOrNull() }
+                                    else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
                                 }
                                 withContext(Dispatchers.Main) { pings = pings + (node.name to ms) }
                             }
@@ -431,7 +433,7 @@ private fun HomeTab(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 12.dp)) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
-            Text(" v0.1.32", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
+            Text(" v${BuildConfig.VERSION_NAME}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp))
         }
         if (sub == null) {
             Text("Нужно приобрести подписку", color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center)
