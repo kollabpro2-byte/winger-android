@@ -75,45 +75,31 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
         for (i in 0 until now.length()) next.put(now.get(i))
         routing.put("rules", next)
     }
-    useTunOnly(cfg)
+    shiftLocalPorts(cfg)
     return cfg.toString()
 }
 
-private fun useTunOnly(cfg: JSONObject) {
-    val dropped = mutableSetOf<String>()
-    val old = cfg.optJSONArray("inbounds")
-    if (old != null) {
-        for (i in 0 until old.length()) {
-            val tag = old.optJSONObject(i)?.optString("tag").orEmpty()
-            if (tag.isNotBlank()) dropped += tag
+/** Keep the subscription inbounds and routing. Only move local proxy ports off the range IncY occupies. */
+private fun shiftLocalPorts(cfg: JSONObject) {
+    val inbounds = cfg.optJSONArray("inbounds") ?: JSONArray().also { cfg.put("inbounds", it) }
+    var next = 38080
+    for (i in 0 until inbounds.length()) {
+        val inbound = inbounds.optJSONObject(i) ?: continue
+        val proto = inbound.optString("protocol").lowercase()
+        if (proto == "tun") continue
+        val port = inbound.optInt("port", 0)
+        val listen = inbound.optString("listen", "127.0.0.1")
+        val local = listen == "127.0.0.1" || listen == "0.0.0.0" || listen == "localhost" || listen.isBlank()
+        if (local && port in 1..65535 && proto in setOf("socks", "http", "mixed", "dokodemo-door", "shadowsocks")) {
+            inbound.put("port", next)
+            next += 1
         }
     }
-    cfg.put("inbounds", JSONArray().put(JSONObject()
+    inbounds.put(JSONObject()
         .put("tag", "tun")
         .put("protocol", "tun")
         .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
-        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic")))))
-    val rules = cfg.optJSONObject("routing")?.optJSONArray("rules") ?: return
-    for (i in 0 until rules.length()) {
-        val rule = rules.optJSONObject(i) ?: continue
-        when (val raw = rule.opt("inboundTag")) {
-            is String -> if (raw in dropped) rule.put("inboundTag", JSONArray().put("tun"))
-            is JSONArray -> {
-                var touched = false
-                val next = JSONArray()
-                val seen = mutableSetOf<String>()
-                for (j in 0 until raw.length()) {
-                    val tag = raw.optString(j)
-                    if (tag in dropped) { touched = true; continue }
-                    if (tag.isNotBlank() && seen.add(tag)) next.put(tag)
-                }
-                if (touched) {
-                    if (seen.add("tun")) next.put("tun")
-                    rule.put("inboundTag", next)
-                }
-            }
-        }
-    }
+        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
 }
 
 data class Endpoint(val host: String, val port: Int)

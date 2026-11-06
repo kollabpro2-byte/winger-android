@@ -10,8 +10,8 @@ android {
         applicationId = "pro.wingerapp.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
-        versionName = "0.1.39"
+        versionCode = 40
+        versionName = "0.1.40"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
