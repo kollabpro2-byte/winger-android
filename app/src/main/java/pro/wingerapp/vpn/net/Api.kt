@@ -462,7 +462,7 @@ object Api {
             setRequestProperty("User-Agent", "Winger/$ver/Android")
             setRequestProperty("x-hwid", hwid)
             setRequestProperty("x-device-os", "Android")
-            setRequestProperty("x-ver-os", Build.VERSION.RELEASE ?: "")
+            setRequestProperty("x-ver-os", Build.VERSION.RELEASE)
             setRequestProperty("x-device-model", device)
             connectTimeout = 15000
             readTimeout = 20000
