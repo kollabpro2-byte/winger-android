@@ -21,7 +21,6 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import libv2ray.Libv2ray
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -344,13 +343,11 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         if (notice == "Подписка обновлена") notice = null
                     }
                 } else {
-                    Libv2ray.initCoreEnv(ctx.filesDir.absolutePath, "")
-                    val http = Store.pingHttp(ctx)
                     val url = Store.testUrl(ctx)
                     coroutineScope {
                         body.servers.map { node ->
                             async(Dispatchers.IO) {
-                                val ms = if (http) {
+                                val ms = if (false) {
                                     val configs = delayConfigs(body.raw, node.name)
                                     if (configs.isEmpty()) null
                                     else coroutineScope { configs.map { cfg -> async { httpPing(cfg, url) } }.awaitAll().filterNotNull().minOrNull() }
@@ -1019,11 +1016,7 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             Switch(raw, { raw = it; Store.rawMode(ctx, it); onApply() })
         }
         Text("ЯДРО", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
-        var core by remember { mutableStateOf(Store.core(ctx)) }
-        Row(Modifier.padding(top = 8.dp)) {
-            Seg("Xray", core == "xray", Modifier.weight(1f)) { core = "xray"; Store.core(ctx, "xray"); onApply() }
-            Seg("sing-box", core == "singbox", Modifier.weight(1f)) { core = "singbox"; Store.core(ctx, "singbox"); onApply() }
-        }
+        Text("sing-box-lx 1.14.4 (тест, XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
