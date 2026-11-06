@@ -39,12 +39,6 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
     }
     cfg.remove("remarks")
     cfg.remove("meta")
-    val inbounds = cfg.optJSONArray("inbounds") ?: JSONArray().also { cfg.put("inbounds", it) }
-    inbounds.put(JSONObject()
-        .put("tag", "tun")
-        .put("protocol", "tun")
-        .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
-        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))))
     val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
     routing.put("domainStrategy", "IPIfNonMatch")
     val rules = routing.optJSONArray("rules") ?: JSONArray().also { routing.put("rules", it) }
@@ -81,7 +75,45 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
         for (i in 0 until now.length()) next.put(now.get(i))
         routing.put("rules", next)
     }
+    useTunOnly(cfg)
     return cfg.toString()
+}
+
+private fun useTunOnly(cfg: JSONObject) {
+    val dropped = mutableSetOf<String>()
+    val old = cfg.optJSONArray("inbounds")
+    if (old != null) {
+        for (i in 0 until old.length()) {
+            val tag = old.optJSONObject(i)?.optString("tag").orEmpty()
+            if (tag.isNotBlank()) dropped += tag
+        }
+    }
+    cfg.put("inbounds", JSONArray().put(JSONObject()
+        .put("tag", "tun")
+        .put("protocol", "tun")
+        .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
+        .put("sniffing", JSONObject().put("enabled", true).put("routeOnly", true).put("destOverride", JSONArray().put("http").put("tls").put("quic")))))
+    val rules = cfg.optJSONObject("routing")?.optJSONArray("rules") ?: return
+    for (i in 0 until rules.length()) {
+        val rule = rules.optJSONObject(i) ?: continue
+        when (val raw = rule.opt("inboundTag")) {
+            is String -> if (raw in dropped) rule.put("inboundTag", JSONArray().put("tun"))
+            is JSONArray -> {
+                var touched = false
+                val next = JSONArray()
+                val seen = mutableSetOf<String>()
+                for (j in 0 until raw.length()) {
+                    val tag = raw.optString(j)
+                    if (tag in dropped) { touched = true; continue }
+                    if (tag.isNotBlank() && seen.add(tag)) next.put(tag)
+                }
+                if (touched) {
+                    if (seen.add("tun")) next.put("tun")
+                    rule.put("inboundTag", next)
+                }
+            }
+        }
+    }
 }
 
 data class Endpoint(val host: String, val port: Int)

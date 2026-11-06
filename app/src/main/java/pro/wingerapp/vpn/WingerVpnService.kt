@@ -16,24 +16,28 @@ import java.io.File
 class WingerVpnService : VpnService(), CoreCallbackHandler {
     private var tun: ParcelFileDescriptor? = null
     private var core: CoreController? = null
+    private val generation = java.util.concurrent.atomic.AtomicInteger()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         VpnLog.init(this)
-        if (intent?.action == "STOP") { Store.running(this, false); stopCore(); stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == "STOP") { generation.incrementAndGet(); Store.running(this, false); stopCore(); stopSelf(); return START_NOT_STICKY }
         startForeground(1, note())
         val config = intent?.getStringExtra(EXTRA_CONFIG)
         if (config.isNullOrBlank()) { VpnLog.add("нет конфига"); return stop() }
+        val gen = generation.incrementAndGet()
+        stopCore()
         Thread {
             try {
                 VpnLog.add("старт Xray, конфиг ${config.length} байт")
                 val fd = openTun()
+                if (generation.get() != gen) return@Thread
                 prepareAssets()
                 Libv2ray.initCoreEnv(filesDir.absolutePath, "")
                 val ctl = Libv2ray.newCoreController(this)
                 core = ctl
                 val alive = java.util.concurrent.atomic.AtomicBoolean(true)
                 Thread {
-                    while (alive.get()) {
+                    while (alive.get() && generation.get() == gen) {
                         if (ctl.isRunning) {
                             val raw = runCatching { ctl.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
                             val (down, up) = parseCoreTraffic(raw)
@@ -44,10 +48,13 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
                 }.start()
                 ctl.startLoop(config, fd)
                 alive.set(false)
+                if (generation.get() != gen) return@Thread
                 Store.running(this, true)
                 VpnLog.add("ядро запущено")
             } catch (e: Exception) {
+                if (generation.get() != gen) return@Thread
                 VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
+                Store.running(this, false)
                 stopCore()
             }
         }.start()
