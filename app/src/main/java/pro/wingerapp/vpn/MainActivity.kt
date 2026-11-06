@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -311,7 +312,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var up by remember { mutableStateOf("0 Б") }
     var down by remember { mutableStateOf("0 Б") }
     val scope = rememberCoroutineScope()
-    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx))
+    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx), Store.useMux(ctx), Store.useFragment(ctx), Store.mtuLow(ctx), Store.useFakeDns(ctx), Store.useDoH(ctx))
     val reload: (Boolean) -> Unit = { ping ->
         scope.launch {
             if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
@@ -968,6 +969,32 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             Store.dnsCustom(ctx, it)
             if (it.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) onApply()
         }, placeholder = { Text("9.9.9.9") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+        Text("СОЕДИНЕНИЕ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        var mux by remember { mutableStateOf(Store.useMux(ctx)) }
+        var frag by remember { mutableStateOf(Store.useFragment(ctx)) }
+        var mtu by remember { mutableStateOf(Store.mtuLow(ctx)) }
+        var fake by remember { mutableStateOf(Store.useFakeDns(ctx)) }
+        var doh by remember { mutableStateOf(Store.useDoH(ctx)) }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Mux", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(mux, { mux = it; Store.useMux(ctx, it); onApply() })
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Fragmentation", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(frag, { frag = it; Store.useFragment(ctx, it); onApply() })
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("MTU 1400", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(mtu, { mtu = it; Store.mtuLow(ctx, it); onApply() })
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("FakeDNS", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(fake, { fake = it; Store.useFakeDns(ctx, it); onApply() })
+        }
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("DNS DoH", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(doh, { doh = it; Store.useDoH(ctx, it); onApply() })
+        }
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))

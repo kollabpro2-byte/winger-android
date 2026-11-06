@@ -30,6 +30,17 @@ object Store {
     }
     fun bypass(ctx: Context) = p(ctx).getString("bypass", "").orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }
     fun bypass(ctx: Context, hosts: List<String>) { p(ctx).edit().putString("bypass", hosts.joinToString("\n")).apply() }
+    // Connection tweaks (IncY-like, toggleable)
+    fun useMux(ctx: Context) = p(ctx).getBoolean("useMux", false)
+    fun useMux(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useMux", on).apply() }
+    fun useFragment(ctx: Context) = p(ctx).getBoolean("useFragment", false)
+    fun useFragment(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useFragment", on).apply() }
+    fun mtuLow(ctx: Context) = p(ctx).getBoolean("mtuLow", false)
+    fun mtuLow(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("mtuLow", on).apply() }
+    fun useFakeDns(ctx: Context) = p(ctx).getBoolean("useFakeDns", false)
+    fun useFakeDns(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useFakeDns", on).apply() }
+    fun useDoH(ctx: Context) = p(ctx).getBoolean("useDoH", false)
+    fun useDoH(ctx: Context, on: Boolean) { p(ctx).edit().putBoolean("useDoH", on).apply() }
     fun coreDown(ctx: Context) = p(ctx).getLong("coreDown", 0L)
     fun coreUp(ctx: Context) = p(ctx).getLong("coreUp", 0L)
     fun coreTraffic(ctx: Context, down: Long, up: Long) { p(ctx).edit().putLong("coreDown", down).putLong("coreUp", up).apply() }

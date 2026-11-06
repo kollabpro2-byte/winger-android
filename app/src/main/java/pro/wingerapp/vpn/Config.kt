@@ -30,7 +30,7 @@ fun readHapp(body: String): SubConfig {
     return SubConfig(body, servers)
 }
 
-fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: String? = null, directDomains: List<String> = emptyList()): String {
+fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: String? = null, directDomains: List<String> = emptyList(), useMux: Boolean = false, useFragment: Boolean = false, mtuLow: Boolean = false, useFakeDns: Boolean = false, useDoH: Boolean = false): String {
     val arr = JSONArray(raw)
     var cfg = arr.optJSONObject(0) ?: error("пустая подписка")
     for (i in 0 until arr.length()) {
@@ -75,25 +75,59 @@ fun xrayConfigFor(raw: String, server: String, ignoreGeo: Boolean = false, dns: 
         for (i in 0 until now.length()) next.put(now.get(i))
         routing.put("rules", next)
     }
-    shiftLocalPorts(cfg)
-    improveConnection(cfg)
+    shiftLocalPorts(cfg, mtuLow)
+    improveConnection(cfg, useMux, useFragment, useFakeDns, useDoH)
     return cfg.toString()
 }
 
-/** Real connection tweaks. Mux is OFF by default (matches IncY use_mux=false).
- *  Forced Mux breaks some VLESS+Vision/Reality servers. */
-private fun improveConnection(cfg: JSONObject) {
-    // Ensure DNS exists — prefer DoH-style fallback like IncY (8.8.8.8)
-    if (cfg.optJSONObject("dns") == null) {
-        cfg.put("dns", JSONObject().put("servers", JSONArray()
-            .put("https://8.8.8.8/dns-query")
-            .put("8.8.8.8")
-            .put("1.1.1.1")))
+/** Real connection tweaks. All optional and off by default (except DNS fallback). */
+private fun improveConnection(cfg: JSONObject, useMux: Boolean, useFragment: Boolean, useFakeDns: Boolean, useDoH: Boolean) {
+    // DNS
+    val dnsObj = cfg.optJSONObject("dns") ?: JSONObject().also { cfg.put("dns", it) }
+    if (useDoH) {
+        dnsObj.put("servers", JSONArray().put("https://8.8.8.8/dns-query").put("8.8.8.8"))
+    } else if (dnsObj.optJSONArray("servers") == null) {
+        dnsObj.put("servers", JSONArray().put("8.8.8.8").put("1.1.1.1"))
+    }
+    if (useFakeDns) {
+        dnsObj.put("servers", JSONArray().put("fakedns").put(dnsObj.optJSONArray("servers")?.opt(0) ?: "8.8.8.8"))
+        dnsObj.put("fakedns", JSONObject().put("ipPool", "198.18.0.0/15").put("poolSize", 65535))
+    }
+
+    // Mux on VLESS
+    if (useMux) {
+        val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
+        for (i in 0 until outbounds.length()) {
+            val o = outbounds.optJSONObject(i) ?: continue
+            if (o.optString("protocol").equals("vless", true) && !o.has("mux")) {
+                o.put("mux", JSONObject().put("enabled", true).put("concurrency", 8))
+            }
+        }
+    }
+
+    // Fragmentation on freedom/direct (simple tlshello)
+    if (useFragment) {
+        val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray()
+        for (i in 0 until outbounds.length()) {
+            val o = outbounds.optJSONObject(i) ?: continue
+            if (o.optString("protocol").equals("freedom", true)) {
+                val stream = o.optJSONObject("streamSettings") ?: JSONObject().also { o.put("streamSettings", it) }
+                val sockopt = stream.optJSONObject("sockopt") ?: JSONObject().also { stream.put("sockopt", it) }
+                sockopt.put("tcpNoDelay", true)
+                val finalmask = stream.optJSONObject("finalmask") ?: JSONObject().also { stream.put("finalmask", it) }
+                finalmask.put("tcp", JSONArray().put(JSONObject()
+                    .put("type", "fragment")
+                    .put("settings", JSONObject()
+                        .put("packets", "tlshello")
+                        .put("length", "100-200")
+                        .put("interval", "10-20"))))
+            }
+        }
     }
 }
 
 /** Keep the subscription inbounds and routing. Only move local proxy ports off the range IncY occupies. */
-private fun shiftLocalPorts(cfg: JSONObject) {
+private fun shiftLocalPorts(cfg: JSONObject, mtuLow: Boolean = false) {
     val inbounds = cfg.optJSONArray("inbounds") ?: JSONArray().also { cfg.put("inbounds", it) }
     var next = 38080
     for (i in 0 until inbounds.length()) {
@@ -111,7 +145,7 @@ private fun shiftLocalPorts(cfg: JSONObject) {
     inbounds.put(JSONObject()
         .put("tag", "tun")
         .put("protocol", "tun")
-        .put("settings", JSONObject().put("name", "xray0").put("MTU", 1500))
+        .put("settings", JSONObject().put("name", "xray0").put("MTU", if (mtuLow) 1400 else 1500))
         .put("sniffing", JSONObject()
             .put("enabled", true)
             .put("routeOnly", true)
