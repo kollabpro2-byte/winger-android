@@ -51,7 +51,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -148,8 +151,19 @@ fun Login(ctx: Context, hwid: String, disconnect: () -> Unit, onOk: () -> Unit) 
         }
         return
     }
-    Column(Modifier.fillMaxSize().background(Bg).padding(24.dp), verticalArrangement = Arrangement.Center) {
-        Text("Winger", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+    Box(Modifier.fillMaxSize().background(Bg)) {
+        Image(
+            painterResource(R.drawable.eagle), "Winger",
+            Modifier.align(Alignment.TopEnd).padding(16.dp).width(42.dp).height(32.dp),
+            contentScale = ContentScale.FillBounds
+        )
+        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
+        Text(
+            "Winger",
+            fontSize = 40.sp,
+            fontWeight = FontWeight.Bold,
+            style = TextStyle(brush = Brush.linearGradient(listOf(Color(0xFF7EE7FF), Color.White, Color(0xFFD8B4FE))))
+        )
         Text("Вход в аккаунт", color = Muted, modifier = Modifier.padding(bottom = 20.dp))
         Field(user, "Логин") { user = it }
         Spacer(Modifier.height(10.dp))
@@ -182,6 +196,7 @@ fun Login(ctx: Context, hwid: String, disconnect: () -> Unit, onOk: () -> Unit) 
                     .clickable { disconnect() }.padding(14.dp),
                 contentAlignment = Alignment.Center
             ) { Text("Выключить VPN", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        }
         }
     }
 }
@@ -540,6 +555,8 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
     var ways by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.PayWay>()) }
     var picked by remember { mutableStateOf(30) }
     var confirm by remember { mutableStateOf<String?>(null) }
+    var toast by remember { mutableStateOf("") }
+    var pickedWay by remember { mutableIntStateOf(0) }
     var thread by remember { mutableStateOf<pro.wingerapp.vpn.net.SupportThread?>(null) }
     var draft by remember { mutableStateOf("") }
     var files by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.Attached>()) }
@@ -569,25 +586,34 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 cab = fresh
                 if (fresh.telegram != null) {
                     load()
-                    note = "Telegram привязан. +3 дня добавлены к подписке"
+                    toast = "Бонус +3 дня начислен"
                     return@launch
                 }
             }
         }
     }
     LaunchedEffect(Unit) { load() }
+    LaunchedEffect(toast) {
+        if (toast.isBlank()) return@LaunchedEffect
+        kotlinx.coroutines.delay(2000)
+        toast = ""
+    }
     val c = cab
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("АККАУНТ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-            Text(c?.login ?: if (sub == null) "нет входа" else "…", color = Color.White, fontSize = 13.sp)
+        if (c == null) {
+            SubLoading()
+        } else {
+        Section {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("АККАУНТ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                Text(c.login, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
         if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-            if (c != null) {
             if (c.telegram == null) {
                 Section {
                     Text("TELEGRAM", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                    Text("+3 дня к подписке", color = Color(0xFF86EFAC), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
                     Text("Привяжите Telegram и заберите бонус", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable { bindTelegram() }.padding(13.dp), contentAlignment = Alignment.Center) {
                         Text("Привязать Telegram +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
@@ -597,24 +623,11 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 Section {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("TELEGRAM", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                        Text(c.telegram ?: "привязан", color = Color(0xFF86EFAC), fontSize = 13.sp)
+                        Text(c.telegram ?: "привязан", color = Purple, fontSize = 16.sp, fontWeight = FontWeight.Normal)
                     }
-                    Text("Бонус +3 дня начислен при привязке", color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
-            Section {
-                Text("ПОДПИСКА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                Text(if (c.expires.isBlank()) "нет" else daysLeft(c.expires).substringBefore(" "), color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-                Text(c.plan, color = Color(0xFFC4B5FD), fontSize = 14.sp)
-                val active = c.status == "ACTIVE"
-                Text(if (active) "активна" else if (c.status == "NONE") "нет подписки" else c.status.lowercase(), color = if (active) Color(0xFF86EFAC) else Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp).clip(RoundedCornerShape(20.dp)).background(if (active) Color(0x2434C759) else Color(0x22F87171)).padding(horizontal = 10.dp, vertical = 4.dp))
-            }
-            Section {
-                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                    Column { Text("УСТРОЙСТВА", color = Color(0xFF7C8A9B), fontSize = 11.sp); Text("${c.devicesUsed} из ${c.deviceLimit}", color = Color.White, modifier = Modifier.padding(top = 4.dp)) }
-                    Column { Text("ТРАФИК", color = Color(0xFF7C8A9B), fontSize = 11.sp); Text(c.traffic, color = Color.White, modifier = Modifier.padding(top = 4.dp)) }
-                }
-            }
+            SubCard(c)
             if (c.offers.isNotEmpty()) {
                 val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
                 Section {
@@ -641,12 +654,38 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                         Box(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
                             scope.launch {
                                 ways = withContext(Dispatchers.IO) { runCatching { Api.payWays() }.getOrDefault(emptyList()) }
+                                pickedWay = 0
                                 choosing = true
                             }
                         }.padding(13.dp), contentAlignment = Alignment.Center) { Text("Продлить", color = Color.White, fontWeight = FontWeight.SemiBold) }
-                    } else ways.forEach { way ->
-                        val amount = offer.amount(way.gateway)
-                        Column(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = !paying) {
+                    } else {
+                        Text("СПОСОБ ОПЛАТЫ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 14.dp))
+                        ways.forEachIndexed { index, way ->
+                            val amount = offer.amount(way.gateway)
+                            val selected = index == pickedWay
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 10.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(if (selected) Purple.copy(.14f) else Color(0xFF0A1424))
+                                    .border(1.dp, if (selected) Purple else Purple.copy(.28f), RoundedCornerShape(18.dp))
+                                    .clickable { pickedWay = index }
+                                    .padding(horizontal = 14.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                PayMarks(way.gateway)
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(way.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Normal)
+                                    val sub = listOf("$amount ₽", way.hint).filter { it.isNotBlank() }.joinToString(" · ")
+                                    if (sub.isNotBlank()) Text(sub, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                                }
+                                Box(
+                                    Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) Purple else Color.White.copy(.28f), CircleShape).background(if (selected) Purple else Color.Transparent)
+                                )
+                            }
+                        }
+                        Box(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable(enabled = !paying && ways.isNotEmpty()) {
+                            val way = ways.getOrNull(pickedWay) ?: return@clickable
+                            val amount = offer.amount(way.gateway)
                             paying = true
                             note = ""
                             scope.launch {
@@ -657,9 +696,8 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                                     choosing = false
                                 } else note = result
                             }
-                        }.padding(vertical = 8.dp)) {
-                            Text(way.title, color = Color.White)
-                            Text("$amount ₽ · ${way.hint}", color = Muted, fontSize = 12.sp)
+                        }.padding(13.dp), contentAlignment = Alignment.Center) {
+                            Text(if (paying) "Открываем…" else "Перейти к оплате", color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -691,6 +729,10 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 }
             }
         }
+    }
+    if (toast.isNotBlank()) {
+        Text(toast, color = Color.White, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF121C2E)).border(1.dp, Purple.copy(.75f), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 12.dp))
+    }
     }
 }
 
@@ -775,6 +817,106 @@ private fun SupportChat(ctx: Context, onClose: () -> Unit) {
                         if (err == null) { draft = ""; files = emptyList(); note = ""; load() } else note = err
                     }
                 }.padding(10.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubLoading() {
+    Box(
+        Modifier.fillMaxWidth().height(168.dp).clip(RoundedCornerShape(18.dp))
+            .background(Brush.linearGradient(listOf(Color(0xE65CBAFF), Color(0xB82E96E6))))
+    ) {
+        val t by rememberInfiniteTransition(label = "sky").animateFloat(0f, 1f, infiniteRepeatable(tween(3600, easing = LinearEasing)), label = "d")
+        Canvas(Modifier.fillMaxSize()) {
+            drawCircle(Color.White.copy(.55f), 18.dp.toPx(), Offset(size.width * t, 46.dp.toPx()))
+            drawCircle(Color(0xFFF4F7FB), 8.dp.toPx(), Offset(size.width * ((t + 0.2f) % 1f), 70.dp.toPx()))
+        }
+    }
+    Text("Подписка в пути", color = Color(0xFFC5D7E6), modifier = Modifier.fillMaxWidth().padding(top = 14.dp), textAlign = TextAlign.Center)
+}
+
+@Composable
+private fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
+    val active = c.status == "ACTIVE"
+    val days = runCatching {
+        val d = java.time.LocalDate.parse(c.expires.take(10))
+        java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
+    }.getOrNull()
+    val trafficValue = c.traffic.substringAfter("из ", c.traffic).trim()
+    Box(
+        Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFFA78BFA), Color(0xFF9578F6), Color(0xFF7C5AEE), Color(0xFF6236C9), Color(0xFF4C1D95))))
+    ) {
+        Flakes()
+        Canvas(Modifier.matchParentSize()) {
+            val r = 84.dp.toPx()
+            drawCircle(Color.White.copy(.16f), r, Offset(size.width - 20.dp.toPx(), 40.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
+            drawLine(Color.White.copy(.16f), Offset(size.width - 20.dp.toPx() - r, 40.dp.toPx()), Offset(size.width - 20.dp.toPx() + r, 40.dp.toPx()), 1.5.dp.toPx())
+        }
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BirdMark()
+                Text("Тариф ", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 6.dp))
+                Text(c.plan, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Row(
+                    Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0x8C24124E)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (active) Color(0xFF3DFF7A) else Color(0xFFFF4D4D)))
+                    Text(if (active) "АКТИВНА" else "НЕАКТИВНА", color = Color.White, fontSize = 11.sp, letterSpacing = 0.8.sp, modifier = Modifier.padding(start = 6.dp))
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 22.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                Column {
+                    Text("ТРАФИК", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp)
+                    Text(trafficValue, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Normal, lineHeight = 34.sp)
+                    Text("ОСТАЛОСЬ", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.8.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text(if (days == null) "—" else "$days ${dayWord(days)}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("УСТРОЙСТВА", color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.8.sp)
+                    Text("${c.devicesUsed} из ${c.deviceLimit}", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BirdMark() {
+    val painter = painterResource(R.drawable.eagle)
+    Box(Modifier.width(22.dp).height(17.dp)) {
+        listOf(-0.4f to 0f, 0.4f to 0f, 0f to -0.4f, 0f to 0.4f).forEach { (x, y) ->
+            Image(painter, null, Modifier.fillMaxSize().offset(x.dp, y.dp), contentScale = ContentScale.FillBounds, colorFilter = ColorFilter.tint(Color.Black, BlendMode.SrcIn))
+        }
+        Image(painter, "птица", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+    }
+}
+
+@Composable
+private fun Flakes() {
+    val t by rememberInfiniteTransition(label = "flakes").animateFloat(0f, 1f, infiniteRepeatable(tween(16000, easing = LinearEasing)), label = "f")
+    Canvas(Modifier.matchParentSize()) {
+        listOf(0.08f to 1.5f, 0.22f to 2.5f, 0.38f to 1.5f, 0.54f to 2f, 0.68f to 1.5f, 0.8f to 3f, 0.9f to 1.5f).forEachIndexed { i, (x, r) ->
+            val p = (t + i * 0.14f) % 1f
+            val alpha = when {
+                p < 0.1f -> p * 8f
+                else -> (1f - p).coerceAtLeast(0f)
+            }
+            drawCircle(Color.White.copy(alpha * 0.85f), r.dp.toPx(), Offset(size.width * x + 8.dp.toPx() * p, size.height * (1f - p)))
+        }
+    }
+}
+
+@Composable
+private fun PayMarks(gateway: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Image(painterResource(R.drawable.sbp), "СБП", Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)))
+        if (gateway == "PLATEGA") {
+            Box(Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Brush.linearGradient(listOf(Color(0xFF21A35A), Color(0xFF0D6A38)))), contentAlignment = Alignment.Center) {
+                Text("МИР", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -920,6 +1062,12 @@ private fun trafficText(sub: Sub?): String {
     val used = "%.1f".format(sub.trafficUsedGb).replace('.', ',')
     val total = if (sub.unlimitedTraffic || sub.trafficLimitGb <= 0) "∞" else "%.0f ГБ".format(sub.trafficLimitGb)
     return "$used ГБ из $total"
+}
+
+private fun dayWord(n: Long) = when {
+    n % 10L == 1L && n % 100L != 11L -> "день"
+    n % 10L in 2L..4L && n % 100L !in 12L..14L -> "дня"
+    else -> "дней"
 }
 
 private fun daysLeft(expires: String?): String {

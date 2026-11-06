@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import pro.wingerapp.vpn.Store
@@ -161,10 +162,10 @@ object Api {
         if (types.isEmpty()) types += listOf("ANTILOPAY", "PLATEGA")
         val out = mutableListOf<PayWay>()
         if ("ANTILOPAY" in types) {
-            out += PayWay("AntiloPay СБП с автосписанием", "по СБП, дальше списывается само", "ANTILOPAY", true)
-            out += PayWay("AntiloPay СБП", "разовая оплата через СБП", "ANTILOPAY", false)
+            out += PayWay("AntilopaPay СБП с автосписанием", "дальше списывается само", "ANTILOPAY", true)
+            out += PayWay("AntilopaPay СБП", "разовая оплата", "ANTILOPAY", false)
         }
-        if ("PLATEGA" in types) out += PayWay("Platega", "карты банков и СБП", "PLATEGA", false)
+        if ("PLATEGA" in types) out += PayWay("Patega СБП или карта МИР на выбор", "", "PLATEGA", false)
         return out
     }
 
@@ -435,22 +436,34 @@ object Api {
         }.getOrDefault(JSONArray())
         return (0 until arr.length()).map { i ->
             val d = arr.getJSONObject(i)
-            val agent = d.optString("userAgent").substringBefore("/").ifBlank { "Клиент" }
-            val platform = d.optString("platform").ifBlank { "Устройство" }
+            val model = d.optString("deviceModel").ifBlank { d.optString("model") }
+            val os = d.optString("osVersion").ifBlank { d.optString("os") }
+            val platform = d.optString("platform")
+            val ua = d.optString("userAgent")
+            val system = listOf(platform, os).filter { it.isNotBlank() }.joinToString(" ")
+            val title = listOf(model, system).filter { it.isNotBlank() }.joinToString(" · ")
+                .ifBlank { ua.ifBlank { "Устройство" } }
             val seen = d.optString("lastSeenAt").replace("T", " ").take(16)
-            HwDevice(d.optString("hwid"), "$platform · $agent", seen)
+            HwDevice(d.optString("hwid"), title, seen)
         }
     }
 
-    fun fetchConfig(url: String, hwid: String): String = getSub(url, hwid, "sfa/1.11.0 Winger/1.0")
-    fun fetchHapp(url: String, hwid: String): String = getSub(url, hwid, "Happ/4.8.0/Android")
+    fun fetchConfig(url: String, hwid: String): String = getSub(url, hwid)
+    fun fetchHapp(url: String, hwid: String): String = getSub(url, hwid)
 
-    private fun getSub(url: String, hwid: String, ua: String): String {
+    private fun getSub(url: String, hwid: String): String {
+        val rawMaker = Build.MANUFACTURER.orEmpty()
+        val maker = if (rawMaker.isEmpty()) "" else rawMaker.substring(0, 1).uppercase() + rawMaker.substring(1)
+        val model = Build.MODEL.orEmpty()
+        val device = if (model.startsWith(maker, true)) model else "$maker $model"
+        val ver = pro.wingerapp.vpn.BuildConfig.VERSION_NAME
         val c = open(url).apply {
             requestMethod = "GET"
-            setRequestProperty("User-Agent", ua)
+            setRequestProperty("User-Agent", "Winger/$ver/Android")
             setRequestProperty("x-hwid", hwid)
             setRequestProperty("x-device-os", "Android")
+            setRequestProperty("x-ver-os", Build.VERSION.RELEASE ?: "")
+            setRequestProperty("x-device-model", device)
             connectTimeout = 15000
             readTimeout = 20000
         }
