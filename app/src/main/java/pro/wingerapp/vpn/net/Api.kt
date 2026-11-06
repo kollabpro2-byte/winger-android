@@ -383,7 +383,7 @@ object Api {
     }
 
     private fun bytes(url: String): Pair<Int, ByteArray> {
-        val c = open(url).apply {
+        val c = exchange(url) {
             requestMethod = "GET"
             setRequestProperty("Accept", "*/*")
             setRequestProperty("Origin", "https://my.wingerapp.pro")
@@ -454,7 +454,7 @@ object Api {
         val model = Build.MODEL.orEmpty()
         val device = if (model.startsWith(maker, true)) model else "$maker $model"
         val ver = pro.wingerapp.vpn.BuildConfig.VERSION_NAME
-        val c = open(url).apply {
+        val c = exchange(url) {
             requestMethod = "GET"
             setRequestProperty("User-Agent", "Happ/4.8.0/Android Winger/$ver")
             setRequestProperty("x-hwid", hwid)
