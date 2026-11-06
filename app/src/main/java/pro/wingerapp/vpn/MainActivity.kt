@@ -142,7 +142,7 @@ fun Login(ctx: Context, hwid: String, disconnect: () -> Unit, onOk: () -> Unit) 
         if (e == null) onOk() else err = e
     }
     if (showRegister) {
-        RegisterForm(onClose = { showRegister = false }) { login, pass ->
+        RegisterForm(hwid, onClose = { showRegister = false }) { login, pass ->
             Store.save(ctx, login, pass)
             onOk()
         }
@@ -232,7 +232,7 @@ private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") 
 }
 
 @Composable
-private fun RegisterForm(onClose: () -> Unit, onDone: (String, String) -> Unit) {
+private fun RegisterForm(hwid: String, onClose: () -> Unit, onDone: (String, String) -> Unit) {
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
