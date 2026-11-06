@@ -1,9 +1,6 @@
 package pro.wingerapp.vpn.net
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
@@ -474,7 +471,7 @@ object Api {
     private fun get(url: String) = call("GET", url, null)
 
     private fun call(method: String, url: String, body: String?): Pair<Int, String> {
-        val c = open(url).apply {
+        val c = exchange(url) {
             requestMethod = method
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
@@ -500,20 +497,8 @@ object Api {
         return code to text
     }
 
-    private fun open(url: String): HttpURLConnection {
-        val u = URL(url)
-        val n = underlying()
-        return ((n?.openConnection(u) ?: u.openConnection()) as HttpURLConnection)
-    }
-
-    private fun underlying(): Network? {
-        if (!::app.isInitialized) return null
-        val cm = app.getSystemService(ConnectivityManager::class.java)
-        return cm.allNetworks.firstOrNull {
-            val caps = cm.getNetworkCapabilities(it) ?: return@firstOrNull false
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        }
+    private fun exchange(url: String, setup: HttpURLConnection.() -> Unit): HttpURLConnection {
+        return (URL(url).openConnection() as HttpURLConnection).apply(setup)
     }
 
     private fun persist() {

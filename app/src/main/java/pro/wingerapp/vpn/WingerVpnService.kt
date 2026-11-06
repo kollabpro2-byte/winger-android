@@ -77,7 +77,12 @@ class WingerVpnService : VpnService(), CoreCallbackHandler {
         b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
         b.addDisallowedApplication(packageName)
         val cm = getSystemService(ConnectivityManager::class.java)
-        cm.activeNetwork?.let { if (Build.VERSION.SDK_INT >= 22) b.setUnderlyingNetworks(arrayOf(it)) }
+        val physical = cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network) ?: return@firstOrNull false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+        }
+        if (physical != null) b.setUnderlyingNetworks(arrayOf(physical))
         tun?.close()
         tun = b.establish() ?: error("tun не поднялся")
         VpnLog.add("tun fd=${tun!!.fd}")
