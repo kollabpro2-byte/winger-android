@@ -86,8 +86,8 @@ fun tcpEndpoints(raw: String, server: String): List<Endpoint> {
         val proto = outbound.optString("protocol").lowercase()
         if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
         proxies++
-        val network = outbound.optJSONObject("streamSettings")?.optString("network").orEmpty().lowercase()
-        if (network in setOf("xhttp", "splithttp", "ws", "grpc", "h2", "http", "httpupgrade", "quic", "kcp")) continue
+        // TCP ping is just the socket connect time to the server address:port,
+        // same as v2rayNG / INCY. Works for any transport (including xhttp/splithttp).
         collectEndpoints(outbound.optJSONObject("settings"), found)
     }
     return if (proxies > 0 && found.isEmpty()) emptyList() else found.distinct()

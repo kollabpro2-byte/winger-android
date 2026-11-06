@@ -48,11 +48,12 @@ object Api {
         return null
     }
 
-    fun register(username: String, password: String): String? {
+    fun register(username: String, password: String, hwid: String = ""): String? {
         val name = username.trim()
         if (!name.matches(Regex("^[a-zA-Z0-9_-]{3,32}$"))) return "Логин: 3–32 символа, латиница, цифры, _ и -"
         if (password.length < 8 || password.length > 128) return "Пароль от 8 до 128 символов"
         val body = JSONObject().put("username", name).put("passwordHash", sha256(password))
+            .put("source", "app").put("hwid", hwid)
         val docs = legalKeys()
         if (docs.length() > 0) body.put("acceptedLegalDocuments", docs)
         val (code, text) = post("$BASE/auth/register", body.toString())
@@ -255,7 +256,7 @@ object Api {
     }
 
     fun telegramLink(): String {
-        val (code, text) = post("$BASE/link/telegram/initiate", "{}")
+        val (code, text) = post("$BASE/link/telegram/initiate", JSONObject().put("source", "app").toString())
         if (code !in 200..299) error(apiError(code, text, "Telegram не открылся"))
         val o = runCatching { JSONObject(text) }.getOrNull() ?: error("Telegram не открылся")
         val ready = jsonText(o, "url").ifBlank { jsonText(o, "link") }.ifBlank { jsonText(o, "deepLink") }

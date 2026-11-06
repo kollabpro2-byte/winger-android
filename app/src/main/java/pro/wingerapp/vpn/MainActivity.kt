@@ -118,11 +118,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun App(ctx: Context, hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var authed by remember { mutableStateOf(false) }
-    if (!authed) Login(ctx, disconnect) { authed = true } else Home(hwid, connect, disconnect)
+    if (!authed) Login(ctx, hwid, disconnect) { authed = true } else Home(hwid, connect, disconnect)
 }
 
 @Composable
-fun Login(ctx: Context, disconnect: () -> Unit, onOk: () -> Unit) {
+fun Login(ctx: Context, hwid: String, disconnect: () -> Unit, onOk: () -> Unit) {
     var user by remember { mutableStateOf(Store.login(ctx)) }
     var pass by remember { mutableStateOf(Store.password(ctx)) }
     var err by remember { mutableStateOf<String?>(null) }
@@ -253,7 +253,7 @@ private fun RegisterForm(onClose: () -> Unit, onDone: (String, String) -> Unit) 
                     busy = true
                     err = null
                     scope.launch {
-                        val e = withContext(Dispatchers.IO) { runCatching { Api.register(user, pass) }.getOrElse { it.message } }
+                        val e = withContext(Dispatchers.IO) { runCatching { Api.register(user, pass, hwid) }.getOrElse { it.message } }
                         busy = false
                         if (e == null) onDone(user.trim(), pass) else err = e
                     }
@@ -533,7 +533,6 @@ private fun HomeTab(
 private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("") }
-    var giftClaimed by remember { mutableStateOf(false) }
     var paying by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var ways by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.PayWay>()) }
@@ -553,13 +552,6 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
         scope.launch {
             val c = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() }
             cab = c
-            if (c?.telegram != null) {
-                val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
-                giftClaimed = gift == "done" || gift == "ok"
-                if (gift == "ok") note = "К подписке добавлены 3 дня"
-            } else {
-                giftClaimed = false
-            }
             if (c != null && c.offers.none { it.days == picked }) picked = c.offers.firstOrNull()?.days ?: picked
         }
     }
@@ -574,15 +566,8 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                 val fresh = withContext(Dispatchers.IO) { runCatching { Api.cabinet() }.getOrNull() } ?: return@repeat
                 cab = fresh
                 if (fresh.telegram != null) {
-                    val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
                     load()
-                    note = when (gift) {
-                        "ok" -> "К подписке добавлены 3 дня"
-                        "done" -> "Telegram привязан. Бонус уже был получен"
-                        "wait" -> "Telegram привязан, но +3 дня ещё не начислены. Нажмите «Забрать»"
-                        "missing" -> "Telegram привязан. Задание +3 дня появится после захода в личный кабинет на сайте"
-                        else -> "Telegram привязан. $gift"
-                    }
+                    note = "Telegram привязан. +3 дня добавлены к подписке"
                     return@launch
                 }
             }
@@ -603,7 +588,7 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                     Text("+3 дня к подписке", color = Color(0xFF86EFAC), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
                     Text("Привяжите Telegram и заберите бонус", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable { bindTelegram() }.padding(13.dp), contentAlignment = Alignment.Center) {
-                        Text("Привязать Telegram", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text("Привязать Telegram +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
                 }
             } else {
@@ -612,28 +597,7 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                         Text("TELEGRAM", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
                         Text(c.telegram ?: "привязан", color = Color(0xFF86EFAC), fontSize = 13.sp)
                     }
-                    if (!giftClaimed) {
-                        Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable {
-                            scope.launch {
-                                val gift = withContext(Dispatchers.IO) { runCatching { Api.claimTelegramGift() }.getOrDefault("wait") }
-                                note = when (gift) {
-                                    "ok" -> "К подписке добавлены 3 дня"
-                                    "done" -> "Бонус за Telegram уже получен"
-                                    "wait" -> "Бонус ещё нельзя забрать. Откройте бота и нажмите снова"
-                                    "missing" -> "Задание +3 дня в кабинете не найдено. Зайдите на сайт в личный кабинет и попробуйте снова"
-                                    else -> gift
-                                }
-                                if (gift == "ok" || gift == "done") {
-                                    giftClaimed = true
-                                    load()
-                                }
-                            }
-                        }.padding(13.dp), contentAlignment = Alignment.Center) {
-                            Text("Забрать +3 дня", color = Color.White, fontWeight = FontWeight.SemiBold)
-                        }
-                    } else {
-                        Text("Бонус +3 дня уже получен", color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                    }
+                    Text("Бонус +3 дня начислен при привязке", color = Color(0xFF86EFAC), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
             Section {
