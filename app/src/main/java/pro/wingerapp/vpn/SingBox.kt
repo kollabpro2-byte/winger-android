@@ -115,7 +115,8 @@ private fun convertVless(xray: JSONObject): JSONObject {
         xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
         sb.put("transport", transport)
     }
-    if (stream.optString("security") == "reality") {
+    val security = stream.optString("security", "")
+    if (security == "reality") {
         sb.put("tls", JSONObject()
             .put("enabled", true)
             .put("server_name", reality.optString("serverName"))
@@ -124,6 +125,13 @@ private fun convertVless(xray: JSONObject): JSONObject {
                 .put("enabled", true)
                 .put("public_key", reality.optString("publicKey"))
                 .put("short_id", reality.optString("shortId"))))
+    } else if (security == "tls") {
+        val tls = stream.optJSONObject("tlsSettings") ?: JSONObject()
+        val serverName = tls.optString("serverName").ifBlank { vnext.optString("address") }
+        sb.put("tls", JSONObject()
+            .put("enabled", true)
+            .put("server_name", serverName)
+            .put("utls", JSONObject().put("enabled", true).put("fingerprint", tls.optString("fingerprint", "chrome"))))
     }
     return sb
 }
