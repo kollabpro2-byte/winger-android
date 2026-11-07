@@ -230,7 +230,6 @@ class WingerVpnService : VpnService() {
                 private var i = 0
                 override fun hasNext(): Boolean = i < list.size
                 override fun next(): io.nekohasekai.libbox.NetworkInterface = list[i++]
-                override fun len(): Int = list.size
             }
         }
         override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
