@@ -101,9 +101,8 @@ class WingerVpnService : VpnService() {
         if (generation.get() != gen) return
         Store.running(this, true)
         VpnLog.add("ядро запущено")
-        // heartbeat to confirm process stays alive after start
         Thread {
-            for (i in 1..6) {
+            for (i in 1..8) {
                 Thread.sleep(1000)
                 if (generation.get() != gen) return@Thread
                 VpnLog.add("alive ${i}s")
@@ -211,17 +210,19 @@ class WingerVpnService : VpnService() {
     }
 
     private fun notifyDefault() {
-        val cm = getSystemService(ConnectivityManager::class.java)
-        val network = cm.activeNetwork ?: return
-        val lp = cm.getLinkProperties(network) ?: return
-        val name = lp.interfaceName ?: return
-        val jni = runCatching { JavaNetworkInterface.getByName(name) }.getOrNull()
-        val idx = jni?.index ?: 1
-        runCatching { ifaceListener?.updateDefaultInterface(name, idx, false, false) }
+        runCatching {
+            val cm = getSystemService(ConnectivityManager::class.java)
+            val network = cm.activeNetwork ?: return
+            val lp = cm.getLinkProperties(network) ?: return
+            val name = lp.interfaceName ?: return
+            val jni = runCatching { JavaNetworkInterface.getByName(name) }.getOrNull()
+            val idx = jni?.index ?: 1
+            ifaceListener?.updateDefaultInterface(name, idx, false, false)
+        }
     }
 
     private inner class BoxPlatform : PlatformInterface {
-        override fun openTun(options: TunOptions): Int = openTun()
+        override fun openTun(options: TunOptions): Int = runCatching { openTun() }.getOrElse { -1 }
         override fun autoDetectInterfaceControl(fd: Int) { runCatching { protect(fd) } }
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
         override fun includeAllNetworks(): Boolean = false
@@ -256,24 +257,25 @@ class WingerVpnService : VpnService() {
             return object : NetworkInterfaceIterator {
                 private var i = 0
                 override fun hasNext(): Boolean = i < list.size
-                override fun next(): io.nekohasekai.libbox.NetworkInterface = list[i++]
+                override fun next(): io.nekohasekai.libbox.NetworkInterface = if (i < list.size) list[i++] else io.nekohasekai.libbox.NetworkInterface()
             }
         }
         override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
             override fun raw(): Boolean = false
-            override fun exchange(ctx: ExchangeContext, message: ByteArray) { ctx.errorCode(1) }
+            override fun exchange(ctx: ExchangeContext, message: ByteArray) { runCatching { ctx.errorCode(1) } }
             override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
-                val host = domain.trim().trimEnd('.')
-                val ip = runCatching { InetAddress.getAllByName(host).firstOrNull()?.hostAddress }.getOrNull()
-                if (ip.isNullOrBlank()) ctx.errorCode(1) else ctx.success(ip)
+                runCatching {
+                    val host = domain.trim().trimEnd('.')
+                    val ip = InetAddress.getAllByName(host).firstOrNull()?.hostAddress
+                    if (ip.isNullOrBlank()) ctx.errorCode(1) else ctx.success(ip)
+                }
             }
         }
     }
 
     private inner class BoxHandler : CommandServerHandler {
         override fun writeDebugMessage(message: String?) {
-            // swallow: logging path has caused native panics in TUN mode
-            runCatching { if (!message.isNullOrBlank()) VpnLog.add("sing-box: ${message.take(200)}") }
+            // completely swallow to avoid native panics in TUN mode
         }
         override fun serviceReload() {}
         override fun serviceStop() { VpnLog.add("sing-box: service stop") }
@@ -291,7 +293,7 @@ class WingerVpnService : VpnService() {
     private class StrIter(private val items: List<String>) : StringIterator {
         private var i = 0
         override fun hasNext(): Boolean = i < items.size
-        override fun next(): String = items[i++]
+        override fun next(): String = if (i < items.size) items[i++] else ""
         override fun len(): Int = items.size
     }
 
