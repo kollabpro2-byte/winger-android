@@ -137,7 +137,7 @@ private fun tunInbound(): JSONObject = JSONObject()
     // nil-panics in libbox 1.14.4-lx.33. Routes are installed by VpnService.Builder.
     .put("auto_route", false)
     .put("strict_route", false)
-    .put("stack", "system")
+    .put("stack", "gvisor")
     .put("dns_mode", "hijack")
 
 private fun dnsSection(server: String): JSONObject {
