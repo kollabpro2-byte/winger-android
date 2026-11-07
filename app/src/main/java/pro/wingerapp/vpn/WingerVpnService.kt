@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.net.ConnectivityManager
-import android.net.IpPrefix
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
@@ -28,7 +27,6 @@ import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
-import io.nekohasekai.libbox.RoutePrefixIterator
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
 import java.io.File
@@ -157,81 +155,27 @@ class WingerVpnService : VpnService() {
         tun = null
     }
 
-    private fun openTun(options: TunOptions): Int {
-        VpnLog.add("openTun вызван")
+    private fun openTun(@Suppress("UNUSED_PARAMETER") options: TunOptions): Int {
+        // libbox 1.14.4-lx.33 panics inside TunOptions.GetInet4Address when OpenTun
+        // calls back into Go (nil prefix list / re-entrant iterator). A Java catch
+        // cannot stop that abort, so the builder uses the profile values directly.
+        VpnLog.add("openTun: TunOptions итераторы не читаем")
         if (prepare(this) != null) error("нет разрешения VPN")
-        val mtu = options.mtu.takeIf { it in 1280..9000 } ?: 1500
+        val mtu = 1500
+        VpnLog.add("openTun mtu=$mtu")
         val b = Builder().setSession("Winger").setMtu(mtu)
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
-        var v4 = 0
-        val inet4 = options.inet4Address
-        while (inet4.hasNext()) {
-            val address = inet4.next()
-            b.addAddress(address.address(), address.prefix())
-            v4++
-        }
-        var v6 = 0
-        val inet6 = options.inet6Address
-        while (inet6.hasNext()) {
-            val address = inet6.next()
-            b.addAddress(address.address(), address.prefix())
-            v6++
-        }
-        if (v4 == 0 && v6 == 0) b.addAddress("172.19.0.1", 30)
-        if (options.autoRoute) {
-            val dnsMode = runCatching { options.dnsMode?.value }.getOrNull()
-            val dnsAdded = try {
-                if (dnsMode == Libbox.DNSModeDisabled) false
-                else {
-                    val dns = options.dnsServerAddress
-                    var n = 0
-                    while (dns.hasNext()) {
-                        b.addDnsServer(dns.next())
-                        n++
-                    }
-                    n > 0
-                }
-            } catch (e: Throwable) {
-                VpnLog.add("tun dns: ${err(e)}")
-                false
-            }
-            if (!dnsAdded) b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                addRoutes(b, options.inet4RouteAddress, if (v4 > 0) "0.0.0.0" else null)
-                addRoutes(b, options.inet6RouteAddress, if (v6 > 0) "::" else null)
-                excludeRoutes(b, options.inet4RouteExcludeAddress)
-                excludeRoutes(b, options.inet6RouteExcludeAddress)
-            } else {
-                addRoutes(b, options.inet4RouteRange, null)
-                addRoutes(b, options.inet6RouteRange, null)
-            }
-            val include = options.includePackage
-            while (include.hasNext()) {
-                val pkg = include.next()
-                try {
-                    b.addAllowedApplication(pkg)
-                } catch (e: Throwable) {
-                    VpnLog.add("addAllowed $pkg: ${err(e)}")
-                }
-            }
-            val exclude = options.excludePackage
-            while (exclude.hasNext()) {
-                val pkg = exclude.next()
-                try {
-                    b.addDisallowedApplication(pkg)
-                } catch (e: Throwable) {
-                    VpnLog.add("addDisallowed $pkg: ${err(e)}")
-                }
-            }
-        } else {
-            b.addRoute("0.0.0.0", 0)
-            b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
-        }
-        // Own UID must stay outside the tunnel or the proxy dial loops back into tun.
+        b.addAddress("172.19.0.1", 30)
+        VpnLog.add("openTun address 172.19.0.1/30")
+        b.addRoute("0.0.0.0", 0)
+        VpnLog.add("openTun route 0.0.0.0/0")
+        b.addDnsServer("172.19.0.2")
+        VpnLog.add("openTun dns 172.19.0.2")
         try {
             b.addDisallowedApplication(packageName)
+            VpnLog.add("openTun exclude $packageName")
         } catch (e: Throwable) {
-            if (rate.allow("self-excl", 60_000)) VpnLog.add("self exclude: ${err(e)}")
+            VpnLog.add("openTun exclude fail: ${err(e)}")
         }
         val cm = getSystemService(ConnectivityManager::class.java)
         val physical = cm.allNetworks.firstOrNull { network ->
@@ -246,24 +190,6 @@ class WingerVpnService : VpnService() {
         tun = pfd
         VpnLog.add("tun fd=${pfd.fd} held mtu=$mtu")
         return pfd.fd
-    }
-
-    private fun addRoutes(b: Builder, routes: RoutePrefixIterator, fallback: String?) {
-        var n = 0
-        while (routes.hasNext()) {
-            val prefix = routes.next()
-            b.addRoute(prefix.address(), prefix.prefix())
-            n++
-        }
-        if (n == 0 && fallback != null) b.addRoute(fallback, 0)
-    }
-
-    private fun excludeRoutes(b: Builder, routes: RoutePrefixIterator) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        while (routes.hasNext()) {
-            val prefix = routes.next()
-            b.excludeRoute(IpPrefix(InetAddress.getByName(prefix.address()), prefix.prefix()))
-        }
     }
 
     private fun prepareAssets() {
@@ -391,39 +317,14 @@ class WingerVpnService : VpnService() {
 
     private fun err(t: Throwable) = "${t.javaClass.simpleName}: ${t.message}"
 
-    private fun tunSummary(options: TunOptions): String = try {
-        val addr = prefixList(options.inet4Address)
-        val routes = prefixList(options.inet4RouteAddress)
-        val dns = runCatching { options.dnsMode?.value }.getOrNull()
-        "mtu=${options.mtu} autoRoute=${options.autoRoute} strict=${options.strictRoute} addr=${addr.joinToString(",")} routes=${routes.size} dns=$dns"
-    } catch (e: Throwable) {
-        "options unreadable: ${err(e)}"
-    }
-
-    private fun prefixList(it: io.nekohasekai.libbox.RoutePrefixIterator?): List<String> {
-        if (it == null) return emptyList()
-        val out = ArrayList<String>(4)
-        var n = 0
-        while (it.hasNext() && n < 6) {
-            out += try {
-                it.next()?.string() ?: "?"
-            } catch (e: Throwable) {
-                "?"
-            }
-            n++
-        }
-        return out
-    }
-
     private inner class BoxPlatform : PlatformInterface {
         override fun openTun(options: TunOptions): Int {
-            val summary = tunSummary(options)
             return try {
                 val fd = openTun(options)
-                VpnLog.add("openTun ok fd=$fd $summary")
+                VpnLog.add("openTun ok fd=$fd")
                 fd
             } catch (e: Throwable) {
-                VpnLog.add("openTun FAIL возвращаю -1 ($summary): ${err(e)}\n${e.stackTraceToString().take(800)}")
+                VpnLog.add("openTun FAIL возвращаю -1: ${err(e)}\n${e.stackTraceToString().take(800)}")
                 -1
             }
         }

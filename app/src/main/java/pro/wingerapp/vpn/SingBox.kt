@@ -133,7 +133,9 @@ private fun tunInbound(): JSONObject = JSONObject()
     .put("tag", "tun-in")
     .put("address", JSONArray().put("172.19.0.1/30"))
     .put("mtu", 1500)
-    .put("auto_route", true)
+    // auto_route stays off: with it on, OpenTun's callback into TunOptions.GetInet4Address
+    // nil-panics in libbox 1.14.4-lx.33. Routes are installed by VpnService.Builder.
+    .put("auto_route", false)
     .put("strict_route", false)
     .put("stack", "system")
     .put("dns_mode", "hijack")
