@@ -27,6 +27,19 @@ jobs:
           gradle wrapper --gradle-version 8.7
           chmod +x ./gradlew
           ./gradlew assembleDebug --no-daemon
+      - name: Sign APK
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "Signing $APK"
+          $ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner sign \
+            --ks app/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out app/build/outputs/apk/debug/app-debug-signed.apk \
+            "$APK"
+          $ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner verify --verbose app/build/outputs/apk/debug/app-debug-signed.apk | head -20
+          mv app/build/outputs/apk/debug/app-debug-signed.apk app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: winger-apk
