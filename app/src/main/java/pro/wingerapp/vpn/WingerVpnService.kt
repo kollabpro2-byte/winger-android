@@ -107,11 +107,27 @@ class WingerVpnService : VpnService() {
         singServer = server
         server.start()
         VpnLog.add("command server started")
+        // Watchdog: if openTun not reached in 12s, dump all thread stacks
+        val watchdog = Thread {
+            try {
+                Thread.sleep(12_000)
+                if (generation.get() == gen && !coreRunning) {
+                    VpnLog.add("WATCHDOG: openTun не достигнут за 12с")
+                    Thread.getAllStackTraces().forEach { (t, st) ->
+                        VpnLog.add("  thread ${t.name} (${t.state}): ${st.take(8).joinToString(" | ") { it.toString().substringAfterLast('.') }}")
+                    }
+                }
+            } catch (_: InterruptedException) {}
+        }.apply { isDaemon = true; name = "vpn-watchdog"; start() }
         try {
+            VpnLog.add("вызов startOrReloadService...")
             server.startOrReloadService(sbConfig, OverrideOptions())
+            VpnLog.add("startOrReloadService вернулся")
         } catch (e: Throwable) {
             VpnLog.add("startOrReload ошибка: ${err(e)}\n${e.stackTraceToString().take(1500)}")
             throw e
+        } finally {
+            watchdog.interrupt()
         }
         if (generation.get() != gen) return
         Store.running(this, true)
