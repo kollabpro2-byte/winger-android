@@ -9,7 +9,8 @@ fun toSingBox(xrayJson: String): String {
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
     val proxy = firstVless(outbounds) ?: return minimalTun()
     val sb = JSONObject()
-    sb.put("log", JSONObject().put("level", "warn"))
+    // logging disabled: known native panic in TUN mode when Go writes via CommandServer
+    sb.put("log", JSONObject().put("disabled", true))
     sb.put("inbounds", JSONArray().put(JSONObject()
         .put("type", "tun")
         .put("tag", "tun-in")
@@ -73,6 +74,7 @@ private fun convertVless(xray: JSONObject): JSONObject {
 }
 
 private fun minimalTun(): String = JSONObject()
+    .put("log", JSONObject().put("disabled", true))
     .put("inbounds", JSONArray().put(JSONObject()
         .put("type", "tun")
         .put("tag", "tun-in")
