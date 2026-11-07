@@ -13,18 +13,14 @@ import org.json.JSONObject
 const val CORE_FILE_LOG = false
 
 /** Convert Xray config to minimal sing-box config with TUN. */
-fun toSingBox(xrayJson: String, coreLogFile: String? = null): String {
+fun toSingBox(xrayJson: String, coreLogFile: String? = null, dnsServer: String = "1.1.1.1"): String {
     val xray = JSONObject(xrayJson)
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
-    val proxy = firstVless(outbounds) ?: return minimalTun(coreLogFile)
+    val proxy = firstVless(outbounds) ?: return minimalTun(coreLogFile, dnsServer)
     val sb = JSONObject()
     sb.put("log", coreLog(coreLogFile))
-    sb.put("inbounds", JSONArray().put(JSONObject()
-        .put("type", "tun")
-        .put("tag", "tun-in")
-        .put("address", JSONArray().put("172.19.0.1/30"))
-        .put("auto_route", false)
-        .put("strict_route", false)))
+    sb.put("dns", dnsSection(dnsServer))
+    sb.put("inbounds", JSONArray().put(tunInbound()))
     val sbOut = JSONArray()
     sbOut.put(JSONObject().put("type", "direct").put("tag", "direct"))
     sbOut.put(convertVless(proxy))
@@ -33,6 +29,7 @@ fun toSingBox(xrayJson: String, coreLogFile: String? = null): String {
         .put("auto_detect_interface", true)
         .put("rules", JSONArray()
             .put(JSONObject().put("action", "sniff"))
+            .put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
             .put(JSONObject().put("action", "route").put("outbound", "proxy"))))
     return sb.toString()
 }
@@ -50,7 +47,9 @@ fun summarizeSingBox(sbConfig: String): String = try {
         val addr = ib.opt("address")?.toString()?.take(80).orEmpty()
         if (type == "tun") {
             tun = true
-            if (addr.isNotBlank()) tunAddr = addr
+            val stack = ib.optString("stack").ifBlank { "default" }
+            val mtu = if (ib.has("mtu")) ib.optInt("mtu").toString() else "default"
+            tunAddr = "$addr stack=$stack mtu=$mtu autoRoute=${ib.optBoolean("auto_route")}"
         }
         inDesc += if (addr.isBlank()) type else "$type $addr"
     }
@@ -129,11 +128,34 @@ private fun convertVless(xray: JSONObject): JSONObject {
     return sb
 }
 
-private fun minimalTun(coreLogFile: String? = null): String = JSONObject()
+private fun tunInbound(): JSONObject = JSONObject()
+    .put("type", "tun")
+    .put("tag", "tun-in")
+    .put("address", JSONArray().put("172.19.0.1/30"))
+    .put("mtu", 1500)
+    .put("auto_route", true)
+    .put("strict_route", false)
+    .put("stack", "system")
+    .put("dns_mode", "hijack")
+
+private fun dnsSection(server: String): JSONObject {
+    val upstream = server.trim().ifBlank { "1.1.1.1" }
+    return JSONObject()
+        .put("servers", JSONArray().put(JSONObject()
+            .put("type", "udp")
+            .put("tag", "remote")
+            .put("server", upstream)))
+        .put("final", "remote")
+}
+
+private fun minimalTun(coreLogFile: String? = null, dnsServer: String = "1.1.1.1"): String = JSONObject()
     .put("log", coreLog(coreLogFile))
-    .put("inbounds", JSONArray().put(JSONObject()
-        .put("type", "tun")
-        .put("tag", "tun-in")
-        .put("address", JSONArray().put("172.19.0.1/30"))))
+    .put("dns", dnsSection(dnsServer))
+    .put("inbounds", JSONArray().put(tunInbound()))
     .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
+    .put("route", JSONObject()
+        .put("auto_detect_interface", true)
+        .put("rules", JSONArray()
+            .put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
+            .put(JSONObject().put("action", "route").put("outbound", "direct"))))
     .toString()

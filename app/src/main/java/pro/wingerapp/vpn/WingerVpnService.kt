@@ -5,16 +5,19 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.IpPrefix
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Debug
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.os.SystemClock
 import android.system.OsConstants
 import go.Seq
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
+import io.nekohasekai.libbox.ConnectionOwner
 import io.nekohasekai.libbox.ExchangeContext
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
@@ -25,10 +28,12 @@ import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
+import io.nekohasekai.libbox.RoutePrefixIterator
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
 import java.io.File
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface as JavaNetworkInterface
 
 class WingerVpnService : VpnService() {
@@ -97,7 +102,7 @@ class WingerVpnService : VpnService() {
         VpnLog.add("sing-box file log ${if (CORE_FILE_LOG) "warn -> singbox.log" else "выключен (CORE_FILE_LOG=false)"}")
         Libbox.setup(opts)
         val logFile = File(filesDir, "singbox.log").absolutePath
-        val sbConfig = toSingBox(config, logFile)
+        val sbConfig = toSingBox(config, logFile, Store.dnsServer(this) ?: "1.1.1.1")
         VpnLog.add(summarizeSingBox(sbConfig))
         VpnLog.add("sing-box конфиг ${sbConfig.length} байт")
         val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
@@ -152,15 +157,82 @@ class WingerVpnService : VpnService() {
         tun = null
     }
 
-    private fun openTun(): Int {
+    private fun openTun(options: TunOptions): Int {
         VpnLog.add("openTun вызван")
         if (prepare(this) != null) error("нет разрешения VPN")
-        val b = Builder().setSession("Winger").setMtu(1500)
+        val mtu = options.mtu.takeIf { it in 1280..9000 } ?: 1500
+        val b = Builder().setSession("Winger").setMtu(mtu)
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
-        b.addAddress("172.19.0.1", 30)
-        b.addRoute("0.0.0.0", 0)
-        b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
-        b.addDisallowedApplication(packageName)
+        var v4 = 0
+        val inet4 = options.inet4Address
+        while (inet4.hasNext()) {
+            val address = inet4.next()
+            b.addAddress(address.address(), address.prefix())
+            v4++
+        }
+        var v6 = 0
+        val inet6 = options.inet6Address
+        while (inet6.hasNext()) {
+            val address = inet6.next()
+            b.addAddress(address.address(), address.prefix())
+            v6++
+        }
+        if (v4 == 0 && v6 == 0) b.addAddress("172.19.0.1", 30)
+        if (options.autoRoute) {
+            val dnsMode = runCatching { options.dnsMode?.value }.getOrNull()
+            val dnsAdded = try {
+                if (dnsMode == Libbox.DNSModeDisabled) false
+                else {
+                    val dns = options.dnsServerAddress
+                    var n = 0
+                    while (dns.hasNext()) {
+                        b.addDnsServer(dns.next())
+                        n++
+                    }
+                    n > 0
+                }
+            } catch (e: Throwable) {
+                VpnLog.add("tun dns: ${err(e)}")
+                false
+            }
+            if (!dnsAdded) b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                addRoutes(b, options.inet4RouteAddress, if (v4 > 0) "0.0.0.0" else null)
+                addRoutes(b, options.inet6RouteAddress, if (v6 > 0) "::" else null)
+                excludeRoutes(b, options.inet4RouteExcludeAddress)
+                excludeRoutes(b, options.inet6RouteExcludeAddress)
+            } else {
+                addRoutes(b, options.inet4RouteRange, null)
+                addRoutes(b, options.inet6RouteRange, null)
+            }
+            val include = options.includePackage
+            while (include.hasNext()) {
+                val pkg = include.next()
+                try {
+                    b.addAllowedApplication(pkg)
+                } catch (e: Throwable) {
+                    VpnLog.add("addAllowed $pkg: ${err(e)}")
+                }
+            }
+            val exclude = options.excludePackage
+            while (exclude.hasNext()) {
+                val pkg = exclude.next()
+                try {
+                    b.addDisallowedApplication(pkg)
+                } catch (e: Throwable) {
+                    VpnLog.add("addDisallowed $pkg: ${err(e)}")
+                }
+            }
+        } else {
+            b.addRoute("0.0.0.0", 0)
+            b.addDnsServer(Store.dnsServer(this) ?: "1.1.1.1")
+        }
+        // Own UID must stay outside the tunnel or the proxy dial loops back into tun.
+        try {
+            b.addDisallowedApplication(packageName)
+        } catch (e: Throwable) {
+            if (rate.allow("self-excl", 60_000)) VpnLog.add("self exclude: ${err(e)}")
+        }
         val cm = getSystemService(ConnectivityManager::class.java)
         val physical = cm.allNetworks.firstOrNull { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@firstOrNull false
@@ -169,9 +241,29 @@ class WingerVpnService : VpnService() {
         }
         if (physical != null) b.setUnderlyingNetworks(arrayOf(physical))
         tun?.close()
-        tun = b.establish() ?: error("tun не поднялся")
-        VpnLog.add("tun fd=${tun!!.fd}")
-        return tun!!.fd
+        val pfd = b.establish() ?: error("tun не поднялся")
+        // Go dups this fd. The ParcelFileDescriptor must stay referenced until stopCore.
+        tun = pfd
+        VpnLog.add("tun fd=${pfd.fd} held mtu=$mtu")
+        return pfd.fd
+    }
+
+    private fun addRoutes(b: Builder, routes: RoutePrefixIterator, fallback: String?) {
+        var n = 0
+        while (routes.hasNext()) {
+            val prefix = routes.next()
+            b.addRoute(prefix.address(), prefix.prefix())
+            n++
+        }
+        if (n == 0 && fallback != null) b.addRoute(fallback, 0)
+    }
+
+    private fun excludeRoutes(b: Builder, routes: RoutePrefixIterator) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        while (routes.hasNext()) {
+            val prefix = routes.next()
+            b.excludeRoute(IpPrefix(InetAddress.getByName(prefix.address()), prefix.prefix()))
+        }
     }
 
     private fun prepareAssets() {
@@ -224,11 +316,15 @@ class WingerVpnService : VpnService() {
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
             val name = lp.interfaceName ?: continue
             val jni = javaIfs.find { it.name == name }
+            if (jni == null) {
+                if (rate.allow("iface-skip-$name", 8_000)) VpnLog.add("iface $name пропущен: нет java index")
+                continue
+            }
             val box = io.nekohasekai.libbox.NetworkInterface()
             box.name = name
-            box.index = jni?.index ?: (result.size + 1)
+            box.index = jni.index
             box.mtu = try {
-                jni?.mtu ?: 1500
+                jni.mtu
             } catch (e: Throwable) {
                 if (rate.allow("mtu-$name", 10_000)) VpnLog.add("mtu $name: ${err(e)}")
                 1500
@@ -323,7 +419,7 @@ class WingerVpnService : VpnService() {
         override fun openTun(options: TunOptions): Int {
             val summary = tunSummary(options)
             return try {
-                val fd = openTun()
+                val fd = openTun(options)
                 VpnLog.add("openTun ok fd=$fd $summary")
                 fd
             } catch (e: Throwable) {
@@ -397,16 +493,38 @@ class WingerVpnService : VpnService() {
         override fun readSystemSSHHostKey(): String = ""
         override fun lookupSFTPServer(): String = ""
         override fun lookupUser(name: String): io.nekohasekai.libbox.PlatformUser? {
-            if (rate.allow("user", 30_000)) VpnLog.add("lookupUser $name -> null")
-            return null
+            if (rate.allow("user", 30_000)) VpnLog.add("lookupUser $name не найден")
+            throw UnsupportedOperationException("lookupUser")
         }
         override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions): io.nekohasekai.libbox.BridgeSession {
             VpnLog.add("createBridge не поддерживается")
             throw UnsupportedOperationException("bridge")
         }
-        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): io.nekohasekai.libbox.ConnectionOwner? {
-            if (rate.allow("owner", 10_000)) VpnLog.add("findConnectionOwner -> null")
-            return null
+        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): ConnectionOwner {
+            // A null return is a nil deref inside libbox. SFA throws when the owner is unknown.
+            try {
+                val owner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val uid = getSystemService(ConnectivityManager::class.java).getConnectionOwnerUid(
+                        ipProtocol,
+                        InetSocketAddress(sourceAddress, sourcePort),
+                        InetSocketAddress(destinationAddress, destinationPort),
+                    )
+                    if (uid == Process.INVALID_UID) error("connection owner not found")
+                    ConnectionOwner().also { it.userId = uid }
+                } else {
+                    Libbox.findConnectionOwner(ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort)
+                }
+                val packages = packageManager.getPackagesForUid(owner.userId)
+                owner.userName = packages?.firstOrNull().orEmpty()
+                owner.setAndroidPackageNames(StrIter(packages?.toList() ?: emptyList()))
+                if (rate.allow("owner-ok", 5_000)) VpnLog.add("findConnectionOwner uid=${owner.userId} pkg=${owner.userName}")
+                return owner
+            } catch (e: Throwable) {
+                if (rate.allow("owner-miss", 3_000)) {
+                    VpnLog.add("findConnectionOwner miss $ipProtocol $sourceAddress:$sourcePort->$destinationAddress:$destinationPort: ${err(e)}")
+                }
+                throw e
+            }
         }
         override fun openShellSession(user: io.nekohasekai.libbox.PlatformUser, path: String, args: StringIterator, dir: String, uid: Int, gid: Int): io.nekohasekai.libbox.ShellSession {
             VpnLog.add("openShellSession не поддерживается")

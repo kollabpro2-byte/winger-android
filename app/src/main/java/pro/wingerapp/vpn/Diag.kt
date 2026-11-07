@@ -50,7 +50,7 @@ object Diag {
             "CrashReport-winger.log.old",
             "stderr.log",
         )) {
-            dumpAndClear(File(ctx.filesDir, name), STDERR_MARK)
+            dumpAndClear(File(ctx.filesDir, name), STDERR_MARK, head = true)
         }
         val reports = File(ctx.filesDir, "crash_reports")
         if (!reports.isDirectory) return
@@ -59,7 +59,7 @@ object Diag {
             .sortedByDescending { it.lastModified() }
             .take(3)
             .toList()
-        for (file in logs) dumpOnce(ctx, file, STDERR_MARK)
+        for (file in logs) dumpOnce(ctx, file, STDERR_MARK, head = true)
     }
 
     fun harvestCoreLog(ctx: Context, rotate: Boolean) {
@@ -134,26 +134,26 @@ object Diag {
         }
     }
 
-    private fun dumpAndClear(file: File, marker: String) {
+    private fun dumpAndClear(file: File, marker: String, head: Boolean = false) {
         try {
             if (!file.exists() || file.length() == 0L) return
-            val tail = readTail(file, 4000)
-            VpnLog.add("$marker ${file.name} ${file.length()} байт\n$tail")
+            val body = if (head) readExcerpt(file) else readTail(file, 4000)
+            VpnLog.add("$marker ${file.name} ${file.length()} байт\n$body")
             file.writeText("")
         } catch (e: Throwable) {
             VpnLog.add("$marker ${file.name} не прочитан: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
-    private fun dumpOnce(ctx: Context, file: File, marker: String) {
+    private fun dumpOnce(ctx: Context, file: File, marker: String, head: Boolean = false) {
         try {
             if (!file.exists() || file.length() == 0L) return
             val key = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
             val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val seen = prefs.getStringSet("core_seen", emptySet())?.toMutableSet() ?: mutableSetOf()
             if (!seen.add(key)) return
-            val tail = readTail(file, 4000)
-            VpnLog.add("$marker ${file.parentFile?.name}/${file.name} ${file.length()} байт\n$tail")
+            val body = if (head) readExcerpt(file) else readTail(file, 4000)
+            VpnLog.add("$marker ${file.parentFile?.name}/${file.name} ${file.length()} байт\n$body")
             val capped = seen.toList().takeLast(40).toSet()
             prefs.edit().putStringSet("core_seen", HashSet(capped)).apply()
         } catch (e: Throwable) {
@@ -164,9 +164,24 @@ object Diag {
     private fun readTail(file: File, maxChars: Int): String {
         val len = file.length()
         if (len <= maxChars) return file.readText()
+        return readAt(file, len - maxChars, maxChars)
+    }
+
+    /** Panic header is at the start of a Go crash dump; the tail is the other goroutines. */
+    private fun readExcerpt(file: File): String {
+        val headN = 6000
+        val tailN = 1500
+        val len = file.length()
+        if (len <= headN + tailN) return file.readText()
+        val head = readAt(file, 0, headN).trimEnd()
+        val tail = readAt(file, len - tailN, tailN).trimStart()
+        return "$head\n…($len байт, середина обрезана)…\n$tail"
+    }
+
+    private fun readAt(file: File, offset: Long, max: Int): String {
         RandomAccessFile(file, "r").use { raf ->
-            raf.seek(len - maxChars)
-            val buf = ByteArray(maxChars)
+            raf.seek(offset.coerceAtLeast(0))
+            val buf = ByteArray(max)
             val n = raf.read(buf)
             return if (n <= 0) "" else String(buf, 0, n, Charsets.UTF_8)
         }
