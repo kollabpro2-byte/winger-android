@@ -3,13 +3,16 @@ package pro.wingerapp.vpn
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Debug
-import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
 import android.system.OsConstants
@@ -35,7 +38,6 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface as JavaNetworkInterface
 
 class WingerVpnService : VpnService() {
-    private var tun: ParcelFileDescriptor? = null
     private var singServer: CommandServer? = null
     private val generation = java.util.concurrent.atomic.AtomicInteger()
     private var ifaceListener: InterfaceUpdateListener? = null
@@ -45,43 +47,110 @@ class WingerVpnService : VpnService() {
         super.onCreate()
         VpnLog.init(this)
         CrashGuard.install()
+        TunnelState.sync(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         VpnLog.init(this)
         CrashGuard.install()
         Diag.harvestCrash(this)
-        if (intent?.action == "STOP") { generation.incrementAndGet(); Store.running(this, false); stopCore(); stopSelf(); return START_NOT_STICKY }
-        startForeground(1, note())
-        val config = intent?.getStringExtra(EXTRA_CONFIG)
-        if (config.isNullOrBlank()) { VpnLog.add("нет конфига"); return stop() }
+        if (intent?.action == ACTION_STOP) {
+            stopTunnel("пользователь")
+            return START_NOT_STICKY
+        }
+        startInForeground()
+        // A sticky restart arrives without extras: reuse the config that worked
+        // last time instead of dying with "нет конфига".
+        val config = intent?.getStringExtra(EXTRA_CONFIG)?.takeIf { it.isNotBlank() }
+            ?: Store.lastConfig(this).takeIf { it.isNotBlank() }
+        if (config.isNullOrBlank()) {
+            fail("нет конфигурации для подключения")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val gen = generation.incrementAndGet()
         stopCore()
         Thread {
             try {
                 VpnLog.add("старт sing-box, конфиг ${config.length} байт")
-                prepareAssets()
                 if (generation.get() != gen) return@Thread
                 startSingBox(config, gen)
             } catch (e: Throwable) {
                 if (generation.get() != gen) return@Thread
                 VpnLog.add("ошибка старта: ${err(e)}\n${e.stackTraceToString().take(1500)}")
-                Store.running(this, false)
                 stopCore()
+                fail(e.message?.take(160) ?: "туннель не поднялся")
+                // START_STICKY would otherwise restart a config that just failed.
+                stopSelf()
             }
         }.start()
         return START_STICKY
     }
 
     override fun onRevoke() {
-        Store.running(this, false)
-        VpnLog.add("систему забрал другой VPN")
+        stopTunnel("система забрала VPN")
+    }
+
+    override fun onDestroy() {
         stopCore()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        super.onDestroy()
+    }
+
+    private fun stopTunnel(reason: String) {
+        VpnLog.add("остановка: $reason")
+        generation.incrementAndGet()
+        stopCore()
+        Store.running(this, false)
+        Store.clearLastConfig(this)
+        TunnelState.off()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
-    override fun onDestroy() { stopCore(); stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy() }
 
-    private fun stop(): Int { stopSelf(); return START_NOT_STICKY }
+    private fun fail(message: String) {
+        VpnLog.add("FAIL: $message")
+        Store.running(this, false)
+        TunnelState.fail(message)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    private fun startInForeground() {
+        val notification = note()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFY_ID, notification)
+        }
+    }
+
+    private fun note(): Notification {
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(NotificationChannel(CHANNEL, "Winger", NotificationManager.IMPORTANCE_LOW))
+        val stop = PendingIntent.getService(
+            this, 1,
+            Intent(this, WingerVpnService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val open = PendingIntent.getActivity(
+            this, 2,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val disconnect = Notification.Action.Builder(
+            Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+            "Отключить",
+            stop,
+        ).build()
+        return Notification.Builder(this, CHANNEL)
+            .setContentTitle("Winger VPN")
+            .setContentText("Канал активен")
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .addAction(disconnect)
+            .build()
+    }
 
     private fun startSingBox(config: String, gen: Int) {
         Seq.setContext(applicationContext)
@@ -96,28 +165,43 @@ class WingerVpnService : VpnService() {
         opts.appVersion = BuildConfig.VERSION_NAME
         opts.debug = false
         val ver = runCatching { Libbox.version() }.getOrElse { "?" }
-        VpnLog.add("libbox $ver redirectStderr: нет в Java API, Setup пишет CrashReport-winger.log, debug=false")
-        VpnLog.add("sing-box file log ${if (CORE_FILE_LOG) "warn -> singbox.log" else "выключен (CORE_FILE_LOG=false)"}")
+        VpnLog.add("libbox $ver, core log=${BuildConfig.CORE_LOG}, debug=false")
         Libbox.setup(opts)
-        val logFile = File(filesDir, "singbox.log").absolutePath
-        val sbConfig = toSingBox(config, logFile, Store.dnsServer(this) ?: "1.1.1.1")
+        val mtu = tunnelMtu()
+        val sbConfig = try {
+            toSingBox(
+                config,
+                TunnelOptions(
+                    dnsServer = Store.dnsServer(this),
+                    directDomains = Store.bypass(this),
+                    useMux = Store.useMux(this),
+                    mtu = mtu,
+                    coreLogFile = if (BuildConfig.CORE_LOG) File(filesDir, "singbox.log").absolutePath else null,
+                ),
+            )
+        } catch (e: Throwable) {
+            // Fail closed: never bring up a direct tunnel and call it a VPN.
+            fail(e.message ?: "не удалось собрать конфиг ядра")
+            stopCore()
+            stopSelf()
+            return
+        }
         VpnLog.add(summarizeSingBox(sbConfig))
-        VpnLog.add("sing-box конфиг ${sbConfig.length} байт")
         val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
         singServer = server
         server.start()
         VpnLog.add("command server started")
-        // Watchdog: if openTun not reached in 12s, dump all thread stacks
         val watchdog = Thread {
             try {
                 Thread.sleep(12_000)
-                if (generation.get() == gen && !coreRunning) {
+                if (generation.get() == gen && !TunnelState.running.value) {
                     VpnLog.add("WATCHDOG: openTun не достигнут за 12с")
                     Thread.getAllStackTraces().forEach { (t, st) ->
                         VpnLog.add("  thread ${t.name} (${t.state}): ${st.take(8).joinToString(" | ") { it.toString().substringAfterLast('.') }}")
                     }
                 }
-            } catch (_: InterruptedException) {}
+            } catch (_: InterruptedException) {
+            }
         }.apply { isDaemon = true; name = "vpn-watchdog"; start() }
         try {
             VpnLog.add("вызов startOrReloadService...")
@@ -130,16 +214,19 @@ class WingerVpnService : VpnService() {
             watchdog.interrupt()
         }
         if (generation.get() != gen) return
+        Store.lastConfig(this, config)
         Store.running(this, true)
-        coreRunning = true
-        VpnLog.add("ядро запущено")
+        TunnelState.on()
+        VpnLog.add("ядро запущено, mtu=$mtu")
         startHeartbeat(gen)
     }
+
+    private fun tunnelMtu() = if (Store.mtuLow(this)) 1400 else 1500
 
     private fun startHeartbeat(gen: Int) {
         Thread {
             val start = SystemClock.elapsedRealtime()
-            var delay = 3_000L
+            var delay = 5_000L
             while (generation.get() == gen) {
                 try {
                     Thread.sleep(delay)
@@ -149,12 +236,12 @@ class WingerVpnService : VpnService() {
                 if (generation.get() != gen) return@Thread
                 val sec = ((SystemClock.elapsedRealtime() - start) / 1000).toInt()
                 val heap = Debug.getNativeHeapAllocatedSize()
-                val threads = Thread.activeCount()
                 val traffic = runCatching { tunTraffic() }.getOrNull()
-                val rx = traffic?.first?.toString() ?: "?"
-                val tx = traffic?.second?.toString() ?: "?"
-                VpnLog.add("alive ${sec}s heap=$heap threads=$threads rx=$rx tx=$tx")
-                delay = if (sec < 60) 3_000L else 15_000L
+                VpnLog.add(
+                    "alive ${sec}s heap=$heap threads=${Thread.activeCount()} " +
+                        "rx=${traffic?.first ?: "?"} tx=${traffic?.second ?: "?"}"
+                )
+                delay = if (sec < 60) 5_000L else 30_000L
             }
         }.apply {
             name = "vpn-heartbeat"
@@ -163,51 +250,55 @@ class WingerVpnService : VpnService() {
     }
 
     private fun stopCore() {
-        coreRunning = false
         runCatching { singServer?.closeService() }.onFailure { VpnLog.add("closeService: ${err(it)}") }
         runCatching { singServer?.close() }.onFailure { VpnLog.add("server.close: ${err(it)}") }
         singServer = null
-        runCatching { tun?.close() }.onFailure { VpnLog.add("tun.close: ${err(it)}") }
-        tun = null
     }
 
-    private fun openTun(@Suppress("UNUSED_PARAMETER") options: TunOptions): Int {
+    /**
+     * The core asks for a tun fd and owns it afterwards, so it is detached from
+     * the ParcelFileDescriptor: closing the same fd twice used to close an
+     * unrelated, freshly allocated fd later in the session.
+     *
+     * TunOptions from the callback is deliberately not read: reading it
+     * nil-panics in libbox 1.14.4-lx.33 while auto_route is off (see SingBox).
+     */
+    private fun openTun(): Int {
         VpnLog.add("openTun start")
-        val prep = prepare(this)
-        if (prep != null) {
-            VpnLog.add("openTun: нет разрешения VPN, prepare вернул intent")
+        if (prepare(this) != null) {
+            VpnLog.add("openTun: нет разрешения VPN")
             error("нет разрешения VPN")
         }
-        val mtu = 1500
-        VpnLog.add("openTun mtu=$mtu")
-        val b = Builder().setSession("Winger").setMtu(mtu)
-        if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
-        b.addAddress("172.19.0.1", 30)
-        VpnLog.add("openTun address 172.19.0.1/30")
-        b.addRoute("0.0.0.0", 0)
-        VpnLog.add("openTun route 0.0.0.0/0")
-        b.addDnsServer("172.19.0.2")
-        VpnLog.add("openTun dns 172.19.0.2")
+        val mtu = tunnelMtu()
+        val builder = Builder().setSession("Winger").setMtu(mtu)
+        builder.addAddress("172.19.0.1", 30)
+        builder.addRoute("0.0.0.0", 0)
+        // IPv6 goes into the tun without an address, i.e. it is blackholed:
+        // otherwise v6 traffic silently bypasses the tunnel.
+        builder.addRoute("::", 0)
+        builder.addDnsServer("172.19.0.2")
         try {
-            b.addDisallowedApplication(packageName)
+            builder.addDisallowedApplication(packageName)
             VpnLog.add("openTun exclude $packageName")
         } catch (e: Throwable) {
             VpnLog.add("openTun exclude fail: ${err(e)}")
         }
-        val cm = getSystemService(ConnectivityManager::class.java)
-        val physical = cm.allNetworks.firstOrNull { network ->
-            val caps = cm.getNetworkCapabilities(network) ?: return@firstOrNull false
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        }
+        val physical = underlyingNetwork()
         if (physical != null) {
-            b.setUnderlyingNetworks(arrayOf(physical))
-            VpnLog.add("openTun underlying set")
+            builder.setUnderlyingNetworks(arrayOf(physical))
+            if (Build.VERSION.SDK_INT >= 29) {
+                val caps = getSystemService(ConnectivityManager::class.java).getNetworkCapabilities(physical)
+                val unmetered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+                builder.setMetered(!unmetered)
+                VpnLog.add("openTun underlying set, metered=${!unmetered}")
+            } else {
+                VpnLog.add("openTun underlying set")
+            }
         } else {
             VpnLog.add("openTun: нет physical network")
         }
         val pfd = try {
-            b.establish()
+            builder.establish()
         } catch (e: Throwable) {
             VpnLog.add("openTun establish exception: ${err(e)}")
             null
@@ -218,35 +309,22 @@ class WingerVpnService : VpnService() {
         }
         val fd = pfd.fd
         if (fd < 0) {
+            runCatching { pfd.close() }
             VpnLog.add("openTun bad fd=$fd")
-            pfd.close()
             error("tun bad fd=$fd")
         }
-        tun?.close()
-        tun = pfd
-        VpnLog.add("tun fd=$fd held mtu=$mtu")
-        return fd
+        val detached = pfd.detachFd()
+        VpnLog.add("tun fd=$detached mtu=$mtu (владение у ядра)")
+        return detached
     }
 
-    private fun prepareAssets() {
-        val stamp = File(filesDir, "geo.version")
-        val version = "3"
-        val fresh = stamp.takeIf { it.exists() }?.readText() != version
-        for (name in listOf("geoip.dat", "geosite.dat")) {
-            val out = File(filesDir, name)
-            if (out.exists() && !fresh) continue
-            assets.open(name).use { input -> out.outputStream().use { input.copyTo(it) } }
-            VpnLog.add("$name ${out.length()} байт")
+    private fun underlyingNetwork(): Network? {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network) ?: return@firstOrNull false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
         }
-        stamp.writeText(version)
-    }
-
-    private fun note(): Notification {
-        val ch = "winger"
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(NotificationChannel(ch, "Winger", NotificationManager.IMPORTANCE_LOW))
-        return Notification.Builder(this, ch).setContentTitle("Winger VPN").setContentText("Канал активен")
-            .setSmallIcon(android.R.drawable.ic_lock_lock).build()
     }
 
     private fun validPrefix(host: String, prefix: Short): String? {
@@ -291,10 +369,10 @@ class WingerVpnService : VpnService() {
                 if (rate.allow("mtu-$name", 10_000)) VpnLog.add("mtu $name: ${err(e)}")
                 1500
             }
-            val addrs = jni?.interfaceAddresses?.mapNotNull { ia ->
+            val addrs = jni.interfaceAddresses.mapNotNull { ia ->
                 val host = ia.address.hostAddress ?: return@mapNotNull null
                 validPrefix(host, ia.networkPrefixLength)
-            }.orEmpty()
+            }
             box.addresses = StrIter(addrs)
             box.dnsServer = StrIter(lp.dnsServers.mapNotNull { it.hostAddress?.substringBefore('%') })
             box.gateway = StrIter(emptyList())
@@ -305,7 +383,9 @@ class WingerVpnService : VpnService() {
                 else -> Libbox.InterfaceTypeOther
             }
             var flags = 0
-            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) flags = flags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                flags = flags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+            }
             box.flags = flags
             box.metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             result.add(box)
@@ -356,7 +436,7 @@ class WingerVpnService : VpnService() {
     private inner class BoxPlatform : PlatformInterface {
         override fun openTun(options: TunOptions): Int {
             return try {
-                val fd = this@WingerVpnService.openTun(options)
+                val fd = this@WingerVpnService.openTun()
                 if (fd < 0) {
                     VpnLog.add("openTun вернул плохой fd=$fd, бросаю")
                     error("bad tun fd=$fd")
@@ -368,6 +448,7 @@ class WingerVpnService : VpnService() {
                 throw e
             }
         }
+
         override fun autoDetectInterfaceControl(fd: Int) {
             try {
                 val ok = protect(fd)
@@ -377,40 +458,48 @@ class WingerVpnService : VpnService() {
                 VpnLog.add("protect($fd) exception: ${err(e)}")
             }
         }
+
         override fun usePlatformAutoDetectInterfaceControl(): Boolean {
             if (rate.allow("cap-protect", 60_000)) VpnLog.add("usePlatformAutoDetectInterfaceControl=true")
             return true
         }
+
         override fun includeAllNetworks(): Boolean {
             if (rate.allow("cap-all", 60_000)) VpnLog.add("includeAllNetworks=false")
             return false
         }
-        override fun underNetworkExtension(): Boolean {
-            if (rate.allow("cap-ext", 60_000)) VpnLog.add("underNetworkExtension=false")
-            return false
-        }
-        override fun usePlatformBridge(): Boolean {
-            if (rate.allow("cap-bridge", 60_000)) VpnLog.add("usePlatformBridge=false")
-            return false
-        }
-        override fun usePlatformShell(): Boolean {
-            if (rate.allow("cap-shell", 60_000)) VpnLog.add("usePlatformShell=false")
-            return false
-        }
+
+        override fun underNetworkExtension(): Boolean = false
+
+        override fun usePlatformBridge(): Boolean = false
+
+        override fun usePlatformShell(): Boolean = false
+
         override fun tailscaleHostname(): String = ""
-        override fun clearDNSCache() { VpnLog.add("clearDNSCache") }
-        override fun registerMyInterface(name: String) { VpnLog.add("registerMyInterface $name") }
-        override fun cancelNotification(identifier: String, typeId: Int) {
-            VpnLog.add("cancelNotification $identifier type=$typeId")
+
+        override fun clearDNSCache() {
+            if (rate.allow("dns-cache", 30_000)) VpnLog.add("clearDNSCache")
         }
-        override fun checkPlatformShell() { VpnLog.add("checkPlatformShell") }
+
+        override fun registerMyInterface(name: String) {
+            if (rate.allow("reg-iface", 30_000)) VpnLog.add("registerMyInterface $name")
+        }
+
+        override fun cancelNotification(identifier: String, typeId: Int) {
+            if (rate.allow("cancel-note", 30_000)) VpnLog.add("cancelNotification $identifier type=$typeId")
+        }
+
+        override fun checkPlatformShell() {}
+
         override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-            VpnLog.add("closeDefaultInterfaceMonitor")
+            if (rate.allow("close-def", 30_000)) VpnLog.add("closeDefaultInterfaceMonitor")
             ifaceListener = null
         }
+
         override fun closeNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {
             if (rate.allow("neigh-close", 30_000)) VpnLog.add("closeNeighborMonitor")
         }
+
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
             VpnLog.add("startDefaultInterfaceMonitor")
             ifaceListener = listener
@@ -420,29 +509,42 @@ class WingerVpnService : VpnService() {
                 VpnLog.add("startDefaultInterfaceMonitor notify: ${err(e)}")
             }
         }
+
         override fun startNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {
             if (rate.allow("neigh-start", 30_000)) VpnLog.add("startNeighborMonitor")
         }
+
         override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {
-            val title = notification?.title?.take(80) ?: "-"
-            VpnLog.add("sendNotification $title")
+            VpnLog.add("sendNotification ${notification?.title?.take(80) ?: "-"}")
         }
+
         override fun readWIFIState(): WIFIState {
             if (rate.allow("wifi", 30_000)) VpnLog.add("readWIFIState empty")
             return WIFIState("", "")
         }
+
         override fun readSystemSSHHostKey(): String = ""
+
         override fun lookupSFTPServer(): String = ""
+
         override fun lookupUser(name: String): io.nekohasekai.libbox.PlatformUser? {
             if (rate.allow("user", 30_000)) VpnLog.add("lookupUser $name не найден")
             throw UnsupportedOperationException("lookupUser")
         }
+
         override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions): io.nekohasekai.libbox.BridgeSession {
             VpnLog.add("createBridge не поддерживается")
             throw UnsupportedOperationException("bridge")
         }
-        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): ConnectionOwner {
-            // A null return is a nil deref inside libbox. SFA throws when the owner is unknown.
+
+        override fun findConnectionOwner(
+            ipProtocol: Int,
+            sourceAddress: String,
+            sourcePort: Int,
+            destinationAddress: String,
+            destinationPort: Int,
+        ): ConnectionOwner {
+            // A null return is a nil deref inside libbox; throw instead.
             try {
                 val owner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val uid = getSystemService(ConnectivityManager::class.java).getConnectionOwnerUid(
@@ -458,19 +560,33 @@ class WingerVpnService : VpnService() {
                 val packages = packageManager.getPackagesForUid(owner.userId)
                 owner.userName = packages?.firstOrNull().orEmpty()
                 owner.setAndroidPackageNames(StrIter(packages?.toList() ?: emptyList()))
-                if (rate.allow("owner-ok", 5_000)) VpnLog.add("findConnectionOwner uid=${owner.userId} pkg=${owner.userName}")
+                if (rate.allow("owner-ok", 5_000)) {
+                    VpnLog.add("findConnectionOwner uid=${owner.userId} pkg=${owner.userName}")
+                }
                 return owner
             } catch (e: Throwable) {
                 if (rate.allow("owner-miss", 3_000)) {
-                    VpnLog.add("findConnectionOwner miss $ipProtocol $sourceAddress:$sourcePort->$destinationAddress:$destinationPort: ${err(e)}")
+                    VpnLog.add(
+                        "findConnectionOwner miss $ipProtocol " +
+                            "$sourceAddress:$sourcePort->$destinationAddress:$destinationPort: ${err(e)}"
+                    )
                 }
                 throw e
             }
         }
-        override fun openShellSession(user: io.nekohasekai.libbox.PlatformUser, path: String, args: StringIterator, dir: String, uid: Int, gid: Int): io.nekohasekai.libbox.ShellSession {
+
+        override fun openShellSession(
+            user: io.nekohasekai.libbox.PlatformUser,
+            path: String,
+            args: StringIterator,
+            dir: String,
+            uid: Int,
+            gid: Int,
+        ): io.nekohasekai.libbox.ShellSession {
             VpnLog.add("openShellSession не поддерживается")
             throw UnsupportedOperationException("shell")
         }
+
         override fun getInterfaces(): NetworkInterfaceIterator {
             val list = try {
                 collectInterfaces()
@@ -482,9 +598,11 @@ class WingerVpnService : VpnService() {
             return object : NetworkInterfaceIterator {
                 private var i = 0
                 override fun hasNext(): Boolean = i < list.size
-                override fun next(): io.nekohasekai.libbox.NetworkInterface = if (i < list.size) list[i++] else io.nekohasekai.libbox.NetworkInterface()
+                override fun next(): io.nekohasekai.libbox.NetworkInterface =
+                    if (i < list.size) list[i++] else io.nekohasekai.libbox.NetworkInterface()
             }
         }
+
         override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
             override fun raw(): Boolean = false
             override fun exchange(ctx: ExchangeContext, message: ByteArray) {
@@ -495,6 +613,7 @@ class WingerVpnService : VpnService() {
                     if (rate.allow("dns-ex-err", 3_000)) VpnLog.add("dns exchange FAIL: ${err(e)}")
                 }
             }
+
             override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
                 try {
                     val host = domain.trim().trimEnd('.')
@@ -502,7 +621,9 @@ class WingerVpnService : VpnService() {
                     if (ip.isNullOrBlank()) {
                         ctx.errorCode(1)
                         if (rate.allow("dns-miss", 3_000)) VpnLog.add("dns lookup miss $network $host")
-                    } else ctx.success(ip)
+                    } else {
+                        ctx.success(ip)
+                    }
                 } catch (e: Throwable) {
                     if (rate.allow("dns-lookup", 3_000)) VpnLog.add("dns lookup FAIL $network $domain: ${err(e)}")
                 }
@@ -512,16 +633,31 @@ class WingerVpnService : VpnService() {
 
     private inner class BoxHandler : CommandServerHandler {
         override fun writeDebugMessage(message: String?) {
-            // swallow: Java callback from Go panicked in TUN mode. debug stays false so this is not called.
+            // debug=false keeps this from being called: the Java callback from Go
+            // panicked in TUN mode.
         }
-        override fun serviceReload() { VpnLog.add("sing-box: serviceReload") }
-        override fun serviceStop() { VpnLog.add("sing-box: serviceStop") }
-        override fun setSystemProxyEnabled(enabled: Boolean) { VpnLog.add("setSystemProxyEnabled=$enabled") }
+
+        override fun serviceReload() {
+            VpnLog.add("sing-box: serviceReload")
+        }
+
+        override fun serviceStop() {
+            VpnLog.add("sing-box: serviceStop")
+        }
+
+        override fun setSystemProxyEnabled(enabled: Boolean) {
+            VpnLog.add("setSystemProxyEnabled=$enabled")
+        }
+
         override fun connectSSHAgent(): Int {
             VpnLog.add("connectSSHAgent не поддерживается")
             throw UnsupportedOperationException("ssh")
         }
-        override fun triggerNativeCrash() { VpnLog.add("triggerNativeCrash вызван") }
+
+        override fun triggerNativeCrash() {
+            VpnLog.add("triggerNativeCrash вызван")
+        }
+
         override fun getSystemProxyStatus(): SystemProxyStatus {
             if (rate.allow("proxy-status", 30_000)) VpnLog.add("getSystemProxyStatus available=false enabled=false")
             val status = SystemProxyStatus()
@@ -540,6 +676,8 @@ class WingerVpnService : VpnService() {
 
     companion object {
         const val EXTRA_CONFIG = "config"
-        @Volatile var coreRunning: Boolean = false
+        const val ACTION_STOP = "pro.wingerapp.vpn.STOP"
+        private const val CHANNEL = "winger"
+        private const val NOTIFY_ID = 1
     }
 }

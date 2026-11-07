@@ -1,78 +1,123 @@
 name: Build APK
+
 on:
   push:
   workflow_dispatch:
+
 permissions:
   contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LIBBOX_URL: https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.33/libbox-1.14.4-lx.33.aar
+  # sha256 of the pinned core: a changed upstream asset fails the build instead of
+  # silently shipping whatever the fork publishes.
+  LIBBOX_SHA256: b1f569b7cf1744b810b2d0c7a05bbe63aa156092cf84811e21dc4e4bb90e0cc8
+
 jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-35 build-tools;35.0.0 platform-tools
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
       - name: Download sing-box core
         run: |
           mkdir -p app/libs
-          curl -fsSL -o app/libs/libbox.aar "https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.33/libbox-1.14.4-lx.33.aar"
+          curl -fsSL -o app/libs/libbox.aar "$LIBBOX_URL"
+          echo "${LIBBOX_SHA256}  app/libs/libbox.aar" | sha256sum -c -
           ls -la app/libs/
-      - name: Build APK
+
+      - name: Release signing config
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-          gradle wrapper --gradle-version 8.7
-          chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
-      - name: Sign APK
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing: a debug-signed release must not be published"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/winger-release.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/winger-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Unit tests
+        run: gradle testDebugUnitTest --no-daemon
+
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Verify signing
         run: |
-          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
-          echo "Signing $APK"
-          $ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner sign \
-            --ks app/debug.keystore \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --ks-key-alias androiddebugkey \
-            --out app/build/outputs/apk/debug/app-debug-signed.apk \
-            "$APK"
-          $ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner verify --verbose app/build/outputs/apk/debug/app-debug-signed.apk | head -20
-          mv app/build/outputs/apk/debug/app-debug-signed.apk app/build/outputs/apk/debug/app-debug.apk
+          for APK in app/build/outputs/apk/release/*.apk; do
+            echo "Checking $APK"
+            "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+            if "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "application-debuggable"; then
+              echo "::error::$APK is debuggable"
+              exit 1
+            fi
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: winger-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/release/*.apk
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           ver=$(sed -n 's/^[[:space:]]*versionName *= *"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
           echo "version=${ver}"
           test -n "$ver"
-          apk="winger-${ver}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
-          body=$(printf '{"tag_name":"v%s","name":"Winger Android %s","body":"Winger Android %s"}' "$ver" "$ver" "$ver")
+          existing=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/v${ver}")
+          if [ "$existing" = "200" ]; then
+            echo "::notice::release v${ver} already exists, publishing artifact only"
+            exit 0
+          fi
+          body=$(printf '{"tag_name":"v%s","name":"Winger Android %s","body":"Winger Android %s (release, зашифрованные prefs, IPv6 без утечек, DNS через туннель). Установите APK под свою архитектуру: arm64-v8a для современных устройств."}' "$ver" "$ver" "$ver")
           code=$(curl -sS -o /tmp/rel.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
             -d "$body")
           echo "create ${code}"
-          cat /tmp/rel.json
-          if [ "$code" != "201" ]; then
-            code=$(curl -sS -o /tmp/rel.json -w "%{http_code}" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/v${ver}")
-            echo "existing ${code}"
-            cat /tmp/rel.json
-          fi
-          test "$code" = "201" -o "$code" = "200"
+          test "$code" = "201"
           upload=$(python3 -c 'import json; print(json.load(open("/tmp/rel.json"))["upload_url"].split("{")[0])')
-          curl -fS -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            --data-binary @"$apk" \
-            "${upload}?name=${apk}"
+          for src in app/build/outputs/apk/release/*.apk; do
+            base=$(basename "$src")
+            abi=$(printf '%s' "$base" | sed -n 's/^app-\(.*\)-release.*\.apk$/\1/p')
+            name="winger-${ver}-${abi:-universal}.apk"
+            cp "$src" "$name"
+            echo "uploading $name"
+            curl -fS -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              --data-binary @"$name" \
+              "${upload}?name=${name}"
+          done

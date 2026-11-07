@@ -25,5 +25,3 @@ fun tcpPing(host: String, port: Int): Int? {
     return null
 }
 
-/** Xray delay probe is not in this build. Kept so call sites compile. */
-fun httpPing(config: String, url: String): Int? = null

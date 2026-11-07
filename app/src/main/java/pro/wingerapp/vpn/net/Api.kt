@@ -5,6 +5,7 @@ import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import pro.wingerapp.vpn.Store
+import pro.wingerapp.vpn.VpnLog
 import java.net.CookieManager
 import java.net.HttpCookie
 import java.net.HttpURLConnection
@@ -17,6 +18,12 @@ object Api {
     val cookies = CookieManager()
     lateinit var app: Context
 
+    /** Fired on the main thread when the panel answers 401: the UI must re-login. */
+    @Volatile
+    var onUnauthorized: (() -> Unit)? = null
+
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     fun init(ctx: Context) {
         app = ctx.applicationContext
         if (cookies.cookieStore.cookies.isNotEmpty()) return
@@ -26,6 +33,21 @@ object Api {
             val c = HttpCookie(p[1], p[2]).apply { domain = p[0]; path = "/" }
             cookies.cookieStore.add(URI("https://${p[0]}/"), c)
         }
+    }
+
+    fun hasSession(): Boolean = runCatching {
+        cookies.cookieStore.cookies.isNotEmpty() ||
+            (::app.isInitialized && Store.cookies(app).isNotBlank())
+    }.getOrDefault(false)
+
+    /** Drop the in-memory session (cookies are persisted by [logout]). */
+    fun reset() {
+        runCatching { cookies.cookieStore.removeAll() }
+    }
+
+    fun logout() {
+        reset()
+        if (::app.isInitialized) Store.logout(app)
     }
 
     fun sha256(text: String): String {
@@ -152,11 +174,16 @@ object Api {
     fun payWays(): List<PayWay> {
         val (code, text) = get("$BASE/gateways")
         val types = mutableSetOf<String>()
-        if (code == 200 && text.startsWith("[")) {
-            val arr = JSONArray(text)
-            for (i in 0 until arr.length()) types += arr.getJSONObject(i).optString("type")
+        val arr = runCatching { jsonList(text, "gateways", "items") }.getOrDefault(JSONArray())
+        for (i in 0 until arr.length()) {
+            arr.optJSONObject(i)?.optString("type")?.takeIf { it.isNotBlank() }?.let { types += it }
         }
-        if (types.isEmpty()) types += listOf("ANTILOPAY", "PLATEGA")
+        if (code != 200 || types.isEmpty()) {
+            // No hardcoded fallback: offering a gateway the panel does not accept
+            // only produces a dead payment button.
+            VpnLog.add("gateways: code=$code types=${types.size}")
+            return emptyList()
+        }
         val out = mutableListOf<PayWay>()
         if ("ANTILOPAY" in types) {
             out += PayWay("AntilopaPay СБП с автосписанием", "дальше списывается само", "ANTILOPAY", true)
@@ -265,32 +292,6 @@ object Api {
         return "https://t.me/$bot?start=link_$token"
     }
 
-    fun claimTelegramGift(): String {
-        // Трогаем сессию — иногда квест появляется только после загрузки кабинета
-        get("$BASE/me")
-        repeat(2) { attempt ->
-            val (code, text) = get("$BASE/quests")
-            if (code != 200) return "не удалось проверить бонус ($code)"
-            val arr = jsonList(text, "quests", "items")
-            for (i in 0 until arr.length()) {
-                val q = arr.optJSONObject(i) ?: continue
-                if (jsonText(q, "type") != "LINK_TELEGRAM") continue
-                val status = jsonText(q, "status").uppercase()
-                val claimable = q.optBoolean("claimable") || jsonText(q, "claimable") == "true"
-                if (!claimable) {
-                    if (status in setOf("CLAIMED", "COMPLETED", "DONE", "REWARDED")) return "done"
-                    return "wait"
-                }
-                val id = jsonText(q, "id")
-                if (id.isBlank()) return "не найден номер задания"
-                val (c, body) = call("POST", "$BASE/quests/$id/claim", null)
-                return if (c in 200..299) "ok" else apiError(c, body, "не удалось забрать +3 дня")
-            }
-            if (attempt == 0) Thread.sleep(1200)
-        }
-        return "missing"
-    }
-
     private fun thread(id: String): SupportThread {
         val (code, text) = get("$BASE/support/tickets/$id")
         if (code != 200) return SupportThread(null, emptyList())
@@ -395,8 +396,13 @@ object Api {
             if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
         }
         val code = c.responseCode
-        val stream = if (code in 200..299) c.inputStream else c.errorStream
-        return code to (stream?.readBytes() ?: ByteArray(0))
+        val payload = try {
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            stream?.readBytes() ?: ByteArray(0)
+        } finally {
+            runCatching { c.disconnect() }
+        }
+        return code to payload
     }
 
     private fun legalKeys(): JSONArray {
@@ -492,8 +498,17 @@ object Api {
             HttpCookie.parse(raw).forEach { cookies.cookieStore.add(URI(url), it) }
         }
         val code = c.responseCode
-        val stream = if (code in 200..299) c.inputStream else c.errorStream
-        val text = stream?.bufferedReader()?.readText().orEmpty()
+        val text = try {
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            stream?.bufferedReader()?.readText().orEmpty()
+        } finally {
+            runCatching { c.disconnect() }
+        }
+        if (code == 401 && !url.endsWith("/auth/login")) {
+            // The session is gone: the UI must go back to login instead of
+            // showing "нет подписки" for a live account.
+            main.post { runCatching { onUnauthorized?.invoke() } }
+        }
         return code to text
     }
 

@@ -1,6 +1,5 @@
 package pro.wingerapp.vpn
 
-import org.json.JSONObject
 import java.io.File
 
 fun tunTraffic(): Pair<Long, Long>? {
@@ -17,36 +16,6 @@ fun tunTraffic(): Pair<Long, Long>? {
         if (best == null || rx + tx > best.first + best.second) best = rx to tx
     }
     return best
-}
-
-fun parseCoreTraffic(raw: String): Pair<Long, Long> {
-    if (raw.isBlank()) return 0L to 0L
-    var up = 0L
-    var down = 0L
-    val obj = runCatching { JSONObject(raw) }.getOrNull()
-    if (obj != null) {
-        for (key in obj.keys()) {
-            val value = when (val v = obj.opt(key)) {
-                is Number -> v.toLong()
-                is JSONObject -> v.optLong("uplink", v.optLong("up", 0)) to v.optLong("downlink", v.optLong("down", 0))
-                else -> null
-            }
-            when (value) {
-                is Long -> {
-                    if (key.contains("uplink") || key.endsWith("up")) up += value
-                    if (key.contains("downlink") || key.endsWith("down")) down += value
-                }
-                is Pair<*, *> -> {
-                    up += value.first as Long
-                    down += value.second as Long
-                }
-            }
-        }
-        if (up + down > 0) return down to up
-    }
-    Regex("uplink[^0-9]{0,12}(\\d+)").findAll(raw).forEach { up += it.groupValues[1].toLong() }
-    Regex("downlink[^0-9]{0,12}(\\d+)").findAll(raw).forEach { down += it.groupValues[1].toLong() }
-    return down to up
 }
 
 fun fmtBytes(n: Long): String {

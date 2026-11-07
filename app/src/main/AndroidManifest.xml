@@ -15,6 +15,9 @@
     </queries>
     <application
         android:name=".WingerApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@drawable/eagle"
         android:label="Winger VPN"
         android:usesCleartextTraffic="false"

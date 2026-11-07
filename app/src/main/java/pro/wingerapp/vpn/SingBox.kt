@@ -4,50 +4,56 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * sing-box file log. Enabled for diagnosis. libbox feeds log lines into
- * CommandServer platform writer; that path can panic in TUN mode if debug=true.
- * File output is separate. Flip back to false after diagnosis.
+ * Knobs that only the service knows about: DNS choice, the "без туннеля" list,
+ * MTU and whether the core writes its own log file.
  */
-const val CORE_FILE_LOG = true
+data class TunnelOptions(
+    val dnsServer: String? = null,
+    val directDomains: List<String> = emptyList(),
+    val useMux: Boolean = false,
+    val mtu: Int = 1500,
+    val coreLogFile: String? = null,
+)
 
-/** Convert Xray config to minimal sing-box config with TUN. */
-fun toSingBox(xrayJson: String, coreLogFile: String? = null, dnsServer: String = "1.1.1.1"): String {
+/**
+ * Turn the selected Xray outbound from the subscription into a working sing-box
+ * config.
+ *
+ * Fails closed on purpose: a subscription without a VLESS outbound throws instead
+ * of bringing up a direct tunnel that would silently send everything in the clear
+ * while the UI claims the VPN is on.
+ */
+fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val xray = JSONObject(xrayJson)
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
-    val proxy = firstVless(outbounds) ?: return minimalTun(coreLogFile, dnsServer)
+    val proxy = firstVless(outbounds)
+        ?: error("в подписке нет VLESS-сервера — туннель не поднят")
     val sb = JSONObject()
-    sb.put("log", coreLog(coreLogFile))
-    sb.put("dns", dnsSection(dnsServer))
-    sb.put("inbounds", JSONArray().put(tunInbound()))
-    val sbOut = JSONArray()
-    sbOut.put(JSONObject().put("type", "direct").put("tag", "direct"))
-    sbOut.put(convertVless(proxy))
-    sb.put("outbounds", sbOut)
+    sb.put("log", coreLog(opts.coreLogFile))
+    sb.put("dns", dnsSection(opts.dnsServer))
+    sb.put("inbounds", JSONArray().put(tunInbound(opts.mtu)))
+    sb.put("outbounds", JSONArray()
+        .put(JSONObject().put("type", "direct").put("tag", "direct"))
+        .put(convertVless(proxy, opts.useMux)))
     sb.put("route", JSONObject()
         .put("auto_detect_interface", true)
-        .put("rules", JSONArray()
-            .put(JSONObject().put("action", "sniff"))
-            .put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
-            .put(JSONObject().put("action", "route").put("outbound", "proxy"))))
+        .put("rules", routeRules(opts.directDomains)))
     return sb.toString()
 }
 
-/** Short config summary. Omits uuid, keys, short id, and passwords. */
+/** Short config summary for the log. Omits uuid, keys, short id and passwords. */
 fun summarizeSingBox(sbConfig: String): String = try {
     val o = JSONObject(sbConfig)
     val inbounds = o.optJSONArray("inbounds") ?: JSONArray()
-    var tun = false
-    var tunAddr = "-"
+    var tunLine = "tun=-"
     val inDesc = ArrayList<String>(inbounds.length())
     for (i in 0 until inbounds.length()) {
         val ib = inbounds.optJSONObject(i) ?: continue
         val type = ib.optString("type", "?")
         val addr = ib.opt("address")?.toString()?.take(80).orEmpty()
         if (type == "tun") {
-            tun = true
-            val stack = ib.optString("stack").ifBlank { "default" }
-            val mtu = if (ib.has("mtu")) ib.optInt("mtu").toString() else "default"
-            tunAddr = "$addr stack=$stack mtu=$mtu autoRoute=${ib.optBoolean("auto_route")}"
+            tunLine = "tun=$addr stack=${ib.optString("stack").ifBlank { "default" }} " +
+                "mtu=${ib.optInt("mtu", 0)} autoRoute=${ib.optBoolean("auto_route")}"
         }
         inDesc += if (addr.isBlank()) type else "$type $addr"
     }
@@ -62,25 +68,29 @@ fun summarizeSingBox(sbConfig: String): String = try {
         if (tag == "proxy" || type == "vless") {
             val host = ob.optString("server")
             val port = ob.optInt("server_port", 0)
-            val transport = ob.optJSONObject("transport")?.optString("type").orEmpty().ifBlank { "-" }
+            val transport = ob.optJSONObject("transport")?.optString("type").orEmpty().ifBlank { "tcp" }
             val tls = ob.optJSONObject("tls")
             val tlsOn = tls?.optBoolean("enabled") == true
             val reality = tls?.optJSONObject("reality")?.optBoolean("enabled") == true
             val flow = ob.optString("flow").ifBlank { "-" }
-            proxyLine = "proxy=$host:$port transport=$transport tls=$tlsOn reality=$reality flow=$flow"
+            val mux = ob.optJSONObject("multiplex")?.optBoolean("enabled") == true
+            proxyLine = "proxy=$host:$port transport=$transport tls=$tlsOn reality=$reality " +
+                "flow=$flow mux=$mux"
         }
     }
     val dns = o.has("dns") && !o.isNull("dns")
+    val detour = o.optJSONObject("dns")?.optJSONArray("servers")?.optJSONObject(0)
+        ?.optString("detour").orEmpty().ifBlank { "-" }
     val rules = o.optJSONObject("route")?.optJSONArray("rules")?.length() ?: 0
-    "cfg tun=$tun addr=$tunAddr in=[${inDesc.joinToString(",")}] out=[${outDesc.joinToString(",")}] $proxyLine dns=$dns rules=$rules"
+    "cfg $tunLine in=[${inDesc.joinToString(",")}] out=[${outDesc.joinToString(",")}] " +
+        "$proxyLine dns=$dns dnsDetour=$detour rules=$rules"
 } catch (e: Throwable) {
     "cfg summary fail: ${e.javaClass.simpleName}: ${e.message}"
 }
 
-private fun coreLog(path: String?): JSONObject {
-    if (!CORE_FILE_LOG || path.isNullOrBlank()) return JSONObject().put("disabled", true)
-    return JSONObject().put("level", "debug").put("output", path).put("timestamp", true)
-}
+private fun coreLog(path: String?): JSONObject =
+    if (!BuildConfig.CORE_LOG || path.isNullOrBlank()) JSONObject().put("disabled", true)
+    else JSONObject().put("level", "info").put("output", path).put("timestamp", true)
 
 private fun firstVless(obs: JSONArray): JSONObject? {
     for (i in 0 until obs.length()) {
@@ -90,13 +100,77 @@ private fun firstVless(obs: JSONArray): JSONObject? {
     return null
 }
 
-private fun convertVless(xray: JSONObject): JSONObject {
+/**
+ * Bypass entries come from the UI as bare hosts, but older versions stored
+ * "domain:bank.ru" and users may paste URLs. Normalise both.
+ */
+private fun routeRules(raw: List<String>): JSONArray {
+    val hosts = raw.mapNotNull { line ->
+        val host = line.trim().lowercase()
+            .removePrefix("domain:")
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .substringBefore('/')
+            .substringBefore(':')
+            .trim()
+        host.takeIf { it.isNotBlank() && it != "domain" }
+    }.distinct()
+    val rules = JSONArray()
+    if (hosts.isNotEmpty()) {
+        rules.put(JSONObject()
+            .put("domain_suffix", JSONArray(hosts))
+            .put("action", "route")
+            .put("outbound", "direct"))
+    }
+    rules.put(JSONObject().put("action", "sniff"))
+    rules.put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
+    rules.put(JSONObject().put("action", "route").put("outbound", "proxy"))
+    return rules
+}
+
+/**
+ * DNS is resolved inside the tunnel: a resolver reached over the physical
+ * interface would leak the query and could be poisoned by the ISP.
+ */
+private fun dnsSection(server: String?): JSONObject {
+    val value = server?.trim().orEmpty().removePrefix("udp://")
+    val upstream = when {
+        value.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) -> value
+        value.contains(':') && !value.contains('/') && !value.contains("://") -> value
+        else -> "1.1.1.1"
+    }
+    return JSONObject()
+        .put("servers", JSONArray().put(JSONObject()
+            .put("type", "udp")
+            .put("tag", "remote")
+            .put("server", upstream)
+            .put("detour", "proxy")))
+        .put("final", "remote")
+}
+
+/**
+ * auto_route stays off: with it on, OpenTun's callback into TunOptions.GetInet4Address
+ * nil-panics in libbox 1.14.4-lx.33. Routes are installed by VpnService.Builder.
+ *
+ * IPv6 is not configured here on purpose. The service routes ::/0 into the tun
+ * without an IPv6 address, so v6 packets are dropped instead of leaking past
+ * the tunnel.
+ */
+private fun tunInbound(mtu: Int): JSONObject = JSONObject()
+    .put("type", "tun")
+    .put("tag", "tun-in")
+    .put("address", JSONArray().put("172.19.0.1/30"))
+    .put("mtu", mtu)
+    .put("auto_route", false)
+    .put("strict_route", false)
+    .put("stack", "gvisor")
+
+private fun convertVless(xray: JSONObject, useMux: Boolean): JSONObject {
     val settings = xray.optJSONObject("settings") ?: JSONObject()
     val vnext = settings.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
     val users = vnext.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
     val stream = xray.optJSONObject("streamSettings") ?: JSONObject()
-    val reality = stream.optJSONObject("realitySettings") ?: JSONObject()
-    val network = stream.optString("network", "tcp")
+    val network = stream.optString("network", "tcp").lowercase()
     val sb = JSONObject()
     sb.put("type", "vless")
     sb.put("tag", "proxy")
@@ -104,93 +178,119 @@ private fun convertVless(xray: JSONObject): JSONObject {
     sb.put("server_port", vnext.optInt("port", 443))
     sb.put("uuid", users.optString("id"))
     val flow = users.optString("flow", "")
-    if (flow.isNotBlank() && network != "xhttp") sb.put("flow", flow)
-    if (network == "xhttp") {
-        val xhttp = stream.optJSONObject("xhttpSettings") ?: JSONObject()
-        val transport = JSONObject().put("type", "xhttp")
-        xhttp.optString("path").takeIf { it.isNotBlank() }?.let { transport.put("path", it) }
-        xhttp.optString("mode").takeIf { it.isNotBlank() }?.let { transport.put("mode", it) }
-        xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
-        val extra = xhttp.optJSONObject("extra")
-        if (extra != null) {
-            extra.optString("uplinkHTTPMethod").takeIf { it.isNotBlank() }?.let { transport.put("uplink_http_method", it) }
-            extra.optString("xPaddingBytes").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_bytes", it) }
-            if (extra.has("xPaddingObfsMode")) transport.put("x_padding_obfs_mode", extra.optBoolean("xPaddingObfsMode"))
-            extra.optString("xPaddingPlacement").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_placement", it) }
-            extra.optString("xPaddingKey").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_key", it) }
-            extra.optString("xPaddingHeader").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_header", it) }
-            extra.optString("xPaddingMethod").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_method", it) }
-            extra.optString("seqPlacement").takeIf { it.isNotBlank() }?.let { transport.put("seq_placement", it) }
-            extra.optString("seqKey").takeIf { it.isNotBlank() }?.let { transport.put("seq_key", it) }
-            extra.optString("sessionPlacement").takeIf { it.isNotBlank() }?.let { transport.put("session_placement", it) }
-            extra.optString("sessionKey").takeIf { it.isNotBlank() }?.let { transport.put("session_key", it) }
-            extra.optString("sessionIDKey").takeIf { it.isNotBlank() }?.let { transport.put("session_id_key", it) }
-            extra.optString("sessionIDPlacement").takeIf { it.isNotBlank() }?.let { transport.put("session_id_placement", it) }
-            extra.optString("uplinkDataPlacement").takeIf { it.isNotBlank() }?.let { transport.put("uplink_data_placement", it) }
-            extra.optString("uplinkDataKey").takeIf { it.isNotBlank() }?.let { transport.put("uplink_data_key", it) }
-            extra.optString("sessionIdFormat").takeIf { it.isNotBlank() }?.let { transport.put("session_id_format", it) }
-            if (extra.has("scMaxBufferedPosts")) transport.put("sc_max_buffered_posts", extra.optInt("scMaxBufferedPosts"))
-            extra.optString("scMaxEachPostBytes").takeIf { it.isNotBlank() }?.let { transport.put("sc_max_each_post_bytes", it) }
-            extra.optString("scMinPostsIntervalMs").takeIf { it.isNotBlank() }?.let { transport.put("sc_min_posts_interval_ms", it) }
-            val xmux = extra.optJSONObject("xmux")
-            if (xmux != null) transport.put("xmux", xmux)
-        }
-        sb.put("transport", transport)
-    }
-    val security = stream.optString("security", "")
-    if (security == "reality") {
-        sb.put("tls", JSONObject()
-            .put("enabled", true)
-            .put("server_name", reality.optString("serverName"))
-            .put("utls", JSONObject().put("enabled", true).put("fingerprint", reality.optString("fingerprint", "chrome")))
-            .put("reality", JSONObject()
-                .put("enabled", true)
-                .put("public_key", reality.optString("publicKey"))
-                .put("short_id", reality.optString("shortId"))))
-    } else if (security == "tls") {
-        val tls = stream.optJSONObject("tlsSettings") ?: JSONObject()
-        val serverName = tls.optString("serverName").ifBlank { vnext.optString("address") }
-        val tlsObj = JSONObject()
-            .put("enabled", true)
-            .put("server_name", serverName)
-            .put("utls", JSONObject().put("enabled", true).put("fingerprint", tls.optString("fingerprint", "chrome")))
-        val alpn = tls.optJSONArray("alpn")
-        if (alpn != null && alpn.length() > 0) tlsObj.put("alpn", alpn)
-        sb.put("tls", tlsObj)
+    // Vision flow only exists for raw TCP; ws/grpc/xhttp configs that carry it
+    // anyway are rejected by the core, and mux cannot be combined with it.
+    val flowUsable = flow.isNotBlank() && network in setOf("tcp", "raw", "")
+    if (flowUsable) sb.put("flow", flow)
+    users.optString("packetEncoding").takeIf { it.isNotBlank() }?.let { sb.put("packet_encoding", it) }
+    transportFor(stream, network)?.let { sb.put("transport", it) }
+    tlsFor(stream, vnext.optString("address"))?.let { sb.put("tls", it) }
+    if (useMux && !flowUsable) {
+        sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", "smux"))
     }
     return sb
 }
 
-private fun tunInbound(): JSONObject = JSONObject()
-    .put("type", "tun")
-    .put("tag", "tun-in")
-    .put("address", JSONArray().put("172.19.0.1/30"))
-    .put("mtu", 1500)
-    // auto_route stays off: with it on, OpenTun's callback into TunOptions.GetInet4Address
-    // nil-panics in libbox 1.14.4-lx.33. Routes are installed by VpnService.Builder.
-    .put("auto_route", false)
-    .put("strict_route", false)
-    .put("stack", "gvisor")
-    .put("dns_mode", "hijack")
-
-private fun dnsSection(server: String): JSONObject {
-    val upstream = server.trim().ifBlank { "1.1.1.1" }
-    return JSONObject()
-        .put("servers", JSONArray().put(JSONObject()
-            .put("type", "udp")
-            .put("tag", "remote")
-            .put("server", upstream)))
-        .put("final", "remote")
+private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
+    return when (stream.optString("security", "").lowercase()) {
+        "reality" -> {
+            val reality = stream.optJSONObject("realitySettings") ?: JSONObject()
+            JSONObject()
+                .put("enabled", true)
+                .put("server_name", reality.optString("serverName"))
+                .put("utls", JSONObject()
+                    .put("enabled", true)
+                    .put("fingerprint", reality.optString("fingerprint", "chrome")))
+                .put("reality", JSONObject()
+                    .put("enabled", true)
+                    .put("public_key", reality.optString("publicKey"))
+                    .put("short_id", reality.optString("shortId")))
+        }
+        "tls" -> {
+            val tlsSettings = stream.optJSONObject("tlsSettings") ?: JSONObject()
+            val tls = JSONObject()
+                .put("enabled", true)
+                .put("server_name", tlsSettings.optString("serverName").ifBlank { address })
+                .put("utls", JSONObject()
+                    .put("enabled", true)
+                    .put("fingerprint", tlsSettings.optString("fingerprint", "chrome")))
+            val alpn = tlsSettings.optJSONArray("alpn")
+            if (alpn != null && alpn.length() > 0) tls.put("alpn", alpn)
+            tls
+        }
+        else -> null
+    }
 }
 
-private fun minimalTun(coreLogFile: String? = null, dnsServer: String = "1.1.1.1"): String = JSONObject()
-    .put("log", coreLog(coreLogFile))
-    .put("dns", dnsSection(dnsServer))
-    .put("inbounds", JSONArray().put(tunInbound()))
-    .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
-    .put("route", JSONObject()
-        .put("auto_detect_interface", true)
-        .put("rules", JSONArray()
-            .put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
-            .put(JSONObject().put("action", "route").put("outbound", "direct"))))
-    .toString()
+/** Xray network names → sing-box transports. Anything unknown is left out. */
+private fun transportFor(stream: JSONObject, network: String): JSONObject? = when (network) {
+    "xhttp", "splithttp" -> xhttpTransport(stream)
+    "ws" -> {
+        val ws = stream.optJSONObject("wsSettings") ?: JSONObject()
+        val t = JSONObject().put("type", "ws")
+        ws.optString("path").takeIf { it.isNotBlank() }?.let { t.put("path", it) }
+        ws.optJSONObject("headers")?.optString("Host")?.takeIf { it.isNotBlank() }?.let { host ->
+            t.put("headers", JSONObject().put("Host", host))
+        }
+        ws.optInt("maxEarlyData", 0).takeIf { it > 0 }?.let { t.put("max_early_data", it) }
+        ws.optString("earlyDataHeaderName").takeIf { it.isNotBlank() }
+            ?.let { t.put("early_data_header_name", it) }
+        t
+    }
+    "grpc" -> {
+        val grpc = stream.optJSONObject("grpcSettings") ?: JSONObject()
+        val t = JSONObject().put("type", "grpc")
+        grpc.optString("serviceName").takeIf { it.isNotBlank() }?.let { t.put("service_name", it) }
+        t
+    }
+    "httpupgrade" -> {
+        val h = stream.optJSONObject("httpupgradeSettings") ?: JSONObject()
+        val t = JSONObject().put("type", "httpupgrade")
+        h.optString("path").takeIf { it.isNotBlank() }?.let { t.put("path", it) }
+        h.optString("host").takeIf { it.isNotBlank() }?.let { t.put("host", it) }
+        t
+    }
+    "h2", "http" -> {
+        val h = stream.optJSONObject("httpSettings") ?: JSONObject()
+        val t = JSONObject().put("type", "http")
+        h.optString("path").takeIf { it.isNotBlank() }?.let { t.put("path", it) }
+        val hosts = h.optJSONArray("host")
+        if (hosts != null && hosts.length() > 0) t.put("host", JSONArray().put(hosts.optString(0)))
+        t
+    }
+    else -> null
+}
+
+/** sing-box-lx xhttp: all the uplink/padding/seq/session knobs Xray puts in `extra`. */
+private fun xhttpTransport(stream: JSONObject): JSONObject {
+    val xhttp = stream.optJSONObject("xhttpSettings") ?: JSONObject()
+    val transport = JSONObject().put("type", "xhttp")
+    xhttp.optString("path").takeIf { it.isNotBlank() }?.let { transport.put("path", it) }
+    xhttp.optString("mode").takeIf { it.isNotBlank() }?.let { transport.put("mode", it) }
+    xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
+    val extra = xhttp.optJSONObject("extra") ?: return transport
+    fun str(key: String, target: String) {
+        extra.optString(key).takeIf { it.isNotBlank() }?.let { transport.put(target, it) }
+    }
+    str("uplinkHTTPMethod", "uplink_http_method")
+    str("xPaddingBytes", "x_padding_bytes")
+    if (extra.has("xPaddingObfsMode")) transport.put("x_padding_obfs_mode", extra.optBoolean("xPaddingObfsMode"))
+    str("xPaddingPlacement", "x_padding_placement")
+    str("xPaddingKey", "x_padding_key")
+    str("xPaddingHeader", "x_padding_header")
+    str("xPaddingMethod", "x_padding_method")
+    str("seqPlacement", "seq_placement")
+    str("seqKey", "seq_key")
+    str("sessionPlacement", "session_placement")
+    str("sessionKey", "session_key")
+    str("sessionIDKey", "session_id_key")
+    str("sessionIDPlacement", "session_id_placement")
+    str("uplinkDataPlacement", "uplink_data_placement")
+    str("uplinkDataKey", "uplink_data_key")
+    str("sessionIdFormat", "session_id_format")
+    if (extra.has("scMaxBufferedPosts")) transport.put("sc_max_buffered_posts", extra.optInt("scMaxBufferedPosts"))
+    str("scMaxEachPostBytes", "sc_max_each_post_bytes")
+    str("scMinPostsIntervalMs", "sc_min_posts_interval_ms")
+    extra.optJSONObject("xmux")?.let { transport.put("xmux", it) }
+    return transport
+}

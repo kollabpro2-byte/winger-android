@@ -9,15 +9,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.webkit.ConsoleMessage
-import android.webkit.CookieManager
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -67,13 +61,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -93,39 +85,69 @@ private val Line = Color(0x14FFFFFF)
 
 class MainActivity : ComponentActivity() {
     private var pendingConfig: String? = null
-    private val vpnPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+    private val vpnPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val cfg = pendingConfig ?: return@registerForActivityResult
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            VpnLog.add("VPN-разрешение отклонено")
+            TunnelState.fail("Разрешение VPN не выдано")
+            return@registerForActivityResult
+        }
         startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_CONFIG, cfg))
     }
     fun connect(config: String) {
         pendingConfig = config
+        TunnelState.clearError()
         val prep = VpnService.prepare(this)
         if (prep != null) vpnPerm.launch(prep)
         else startForegroundService(Intent(this, WingerVpnService::class.java).putExtra(WingerVpnService.EXTRA_CONFIG, config))
     }
     fun disconnect() {
         Store.running(this, false)
-        startService(Intent(this, WingerVpnService::class.java).setAction("STOP"))
+        Store.clearLastConfig(this)
+        TunnelState.off()
+        runCatching { startService(Intent(this, WingerVpnService::class.java).setAction(WingerVpnService.ACTION_STOP)) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         VpnLog.init(this)
         CrashGuard.install()
         Diag.harvestCrash(this)
-        Diag.harvestCoreLog(this, rotate = !WingerVpnService.coreRunning)
+        Diag.harvestCoreLog(this, rotate = true)
         Diag.logExitReasons(this)
         VpnLog.add("app start")
         pro.wingerapp.vpn.net.Api.init(this)
+        TunnelState.sync(this)
         setContent { App(this, hwid(), ::connect, ::disconnect) }
     }
-    private fun hwid() = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-        ?.padEnd(16, '0')?.take(32) ?: "winger-android-device"
+
+    /**
+     * ANDROID_ID is stable per signing key, but it can be empty on some devices.
+     * A shared constant would give every such device the same HWID (and the same
+     * trial), so fall back to a hash of the build fingerprint instead.
+     */
+    private fun hwid(): String {
+        val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        if (!id.isNullOrBlank() && id.length >= 8) return id
+        val seed = "${Build.MANUFACTURER}|${Build.MODEL}|${Build.FINGERPRINT}"
+        return pro.wingerapp.vpn.net.Api.sha256(seed).take(32)
+    }
 }
 
 @Composable
 fun App(ctx: Context, hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
-    var authed by remember { mutableStateOf(false) }
-    if (!authed) Login(ctx, hwid, disconnect) { authed = true } else Home(hwid, connect, disconnect)
+    var authed by remember { mutableStateOf(pro.wingerapp.vpn.net.Api.hasSession()) }
+    DisposableEffect(Unit) {
+        pro.wingerapp.vpn.net.Api.onUnauthorized = { authed = false }
+        onDispose { pro.wingerapp.vpn.net.Api.onUnauthorized = null }
+    }
+    val onLogout: () -> Unit = {
+        disconnect()
+        pro.wingerapp.vpn.net.Api.logout()
+        TunnelState.clearError()
+        authed = false
+    }
+    if (!authed) Login(ctx, hwid, disconnect) { authed = true }
+    else Home(hwid, connect, disconnect, onLogout)
 }
 
 @Composable
@@ -205,51 +227,6 @@ fun Login(ctx: Context, hwid: String, disconnect: () -> Unit, onOk: () -> Unit) 
     }
 }
 
-private const val CUSTOM_TABS = "android.support.customtabs.action.CustomTabsService"
-
-private fun browserPackage(ctx: Context): String? {
-    val pm = ctx.packageManager
-    val view = Intent(Intent.ACTION_VIEW, Uri.parse("https://my.wingerapp.pro"))
-    val handlers = pm.queryIntentActivities(view, 0)
-        .map { it.activityInfo.packageName }
-        .distinct()
-    return handlers.firstOrNull { hasCustomTabs(ctx, it) } ?: handlers.firstOrNull()
-}
-
-private fun hasCustomTabs(ctx: Context, pkg: String): Boolean {
-    val svc = Intent(CUSTOM_TABS).setPackage(pkg)
-    return ctx.packageManager.resolveService(svc, 0) != null
-}
-
-private fun hasBrowser(ctx: Context) = browserPackage(ctx) != null
-
-private fun openCabinet(ctx: Context, url: String = "https://my.wingerapp.pro") {
-    val pkg = browserPackage(ctx)
-    val uri = Uri.parse(url)
-    VpnLog.add("openCabinet: $url browser=$pkg")
-    if (pkg != null && hasCustomTabs(ctx, pkg)) {
-        try {
-            val intent = CustomTabsIntent.Builder().setShowTitle(true).build().intent
-            intent.setPackage(pkg)
-            intent.data = uri
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            ctx.startActivity(intent)
-            VpnLog.add("CustomTabs launched: $pkg")
-            return
-        } catch (e: Exception) {
-            VpnLog.add("CustomTabs failed: ${e.message}")
-        }
-    }
-    try {
-        val view = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (pkg != null) view.setPackage(pkg)
-        ctx.startActivity(view)
-        VpnLog.add("External browser launched: $pkg")
-    } catch (e: Exception) {
-        VpnLog.add("External browser failed: ${e.message}")
-    }
-}
-
 @Composable
 private fun RegisterForm(hwid: String, onClose: () -> Unit, onDone: (String, String) -> Unit) {
     var user by remember { mutableStateOf("") }
@@ -296,10 +273,11 @@ fun Field(v: String, label: String, password: Boolean = false, on: (String) -> U
 }
 
 @Composable
-fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
+fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit, onLogout: () -> Unit) {
     val ctx = LocalContext.current
     var tab by remember { mutableIntStateOf(0) }
-    var on by remember { mutableStateOf(Store.running(ctx)) }
+    val on by TunnelState.running.collectAsState()
+    val tunnelError by TunnelState.error.collectAsState()
     var pinging by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var elapsed by remember { mutableStateOf("00:00:00") }
@@ -307,7 +285,6 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var raw by remember { mutableStateOf("") }
     var servers by remember { mutableStateOf(listOf<ServerNode>()) }
     var pings by remember { mutableStateOf(mapOf<String, Int?>()) }
-    var ignoreGeo by remember { mutableStateOf(false) }
     var place by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -315,7 +292,7 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
     var up by remember { mutableStateOf("0 Б") }
     var down by remember { mutableStateOf("0 Б") }
     val scope = rememberCoroutineScope()
-    fun cfg(name: String) = xrayConfigFor(raw, name, ignoreGeo, Store.dnsServer(ctx), Store.bypass(ctx), Store.useMux(ctx), Store.useFragment(ctx), Store.mtuLow(ctx), Store.useFakeDns(ctx), Store.useDoH(ctx), Store.rawMode(ctx))
+    fun cfg(name: String) = xrayConfigFor(raw, name)
     val reload: (Boolean) -> Unit = { ping ->
         scope.launch {
             if (ping) { pinging = true; pings = emptyMap() } else refreshing = true
@@ -347,21 +324,14 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
                         if (notice == "Подписка обновлена") notice = null
                     }
                 } else {
-                    val url = Store.testUrl(ctx)
                     coroutineScope {
                         body.servers.map { node ->
                             async(Dispatchers.IO) {
-                                val ms = if (false) {
-                                    val configs = delayConfigs(body.raw, node.name)
-                                    if (configs.isEmpty()) null
-                                    else coroutineScope { configs.map { cfg -> async { httpPing(cfg, url) } }.awaitAll().filterNotNull().minOrNull() }
-                                } else {
-                                    val points = tcpEndpoints(body.raw, node.name).ifEmpty {
-                                        listOf(Endpoint(node.host, if (node.port in 1..65535) node.port else 443))
-                                    }.filter { it.host.isNotBlank() && it.port in 1..65535 }
-                                    if (points.isEmpty()) -1
-                                    else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
-                                }
+                                val points = tcpEndpoints(body.raw, node.name).ifEmpty {
+                                    listOf(Endpoint(node.host, if (node.port in 1..65535) node.port else 443))
+                                }.filter { it.host.isNotBlank() && it.port in 1..65535 }
+                                val ms = if (points.isEmpty()) -1
+                                else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
                                 withContext(Dispatchers.Main) { pings = pings + (node.name to ms) }
                             }
                         }.awaitAll()
@@ -395,8 +365,8 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
             elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
             kotlinx.coroutines.delay(1000)
             val tun = tunTraffic()
-            val rx = tun?.first ?: Store.coreDown(ctx)
-            val tx = tun?.second ?: Store.coreUp(ctx)
+            val rx = tun?.first ?: 0L
+            val tx = tun?.second ?: 0L
             down = fmtBytes(rx)
             up = fmtBytes(tx)
         }
@@ -406,25 +376,25 @@ fun Home(hwid: String, connect: (String) -> Unit, disconnect: () -> Unit) {
         when (tab) {
             0 -> HomeTab(
                 ctx = ctx, hwid = hwid, sub = sub, servers = servers, pings = pings, place = place,
-                on = on, elapsed = elapsed, up = up, down = down, pinging = pinging, refreshing = refreshing, err = err, notice = notice,
-                ignoreGeo = ignoreGeo, raw = raw, connect = connect, disconnect = disconnect, reload = reload,
+                on = on, elapsed = elapsed, up = up, down = down, pinging = pinging, refreshing = refreshing,
+                err = err ?: tunnelError, notice = notice,
+                raw = raw, connect = connect, disconnect = disconnect, reload = reload,
                 onSelect = { name ->
                     place = name
                     connect(cfg(name))
-                    on = true
-                    Store.running(ctx, true)
                 },
                 onToggle = {
-                    if (on) { disconnect(); on = false }
-                    else if (raw.isNotBlank() && place.isNotBlank()) {
+                    if (on) {
+                        disconnect()
+                    } else if (raw.isNotBlank() && place.isNotBlank()) {
                         connect(cfg(place))
-                        on = true
-                        Store.running(ctx, true)
+                    } else {
+                        err = "Сначала выберите сервер"
                     }
                 }
             )
-            1 -> AccountTab(ctx, sub) { chat = true }
-            2 -> SettingsTab(ctx, ignoreGeo, { ignoreGeo = it }) {
+            1 -> AccountTab(ctx, onLogout = onLogout) { chat = true }
+            2 -> SettingsTab(ctx) {
                 if (on && raw.isNotBlank() && place.isNotBlank()) connect(cfg(place))
             }
         }
@@ -452,7 +422,7 @@ private fun NavItem(label: String, active: Boolean, onClick: () -> Unit) {
 private fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
     place: String, on: Boolean, elapsed: String, up: String, down: String, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
-    ignoreGeo: Boolean, raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
+    raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
@@ -533,7 +503,7 @@ private fun HomeTab(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(node.name, color = Color(0xFFE8EEF6), fontWeight = FontWeight.Normal, fontSize = 13.sp)
-                            Text("VLESS · TCP · REALITY · JSON", color = Muted, fontSize = 10.sp)
+                            Text("VLESS · ${node.port}", color = Muted, fontSize = 10.sp)
                         }
                         if (waiting) {
                             CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
@@ -557,7 +527,7 @@ private fun HomeTab(
 }
 
 @Composable
-private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
+private fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Unit) {
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
@@ -748,6 +718,20 @@ private fun AccountTab(ctx: Context, sub: Sub?, onSupport: () -> Unit) {
                             }
                         }
                     }
+                }
+            }
+            Section {
+                Row(Modifier.fillMaxWidth().clickable { onLogout() }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("СЕССИЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(
+                        "выйти",
+                        color = Color(0xFFF87171),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF1F1626))
+                            .border(1.dp, Color(0xFFF87171).copy(.5f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
                 }
             }
             Section {
@@ -960,24 +944,19 @@ private fun Section(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Unit, onApply: () -> Unit) {
+private fun SettingsTab(ctx: Context, onApply: () -> Unit) {
     var log by remember { mutableStateOf(VpnLog.text()) }
-    var http by remember { mutableStateOf(Store.pingHttp(ctx)) }
-    var url by remember { mutableStateOf(Store.testUrl(ctx)) }
     var dns by remember { mutableStateOf(Store.dnsMode(ctx)) }
     var custom by remember { mutableStateOf(Store.dnsCustom(ctx)) }
     var hosts by remember { mutableStateOf(Store.bypass(ctx)) }
     var site by remember { mutableStateOf("") }
+    var mux by remember { mutableStateOf(Store.useMux(ctx)) }
+    var mtu by remember { mutableStateOf(Store.mtuLow(ctx)) }
+    var logOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
         Text("НАСТРОЙКИ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-        Text("ПРОВЕРКА ПИНГА", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 18.dp))
-        Row(Modifier.padding(top = 8.dp)) {
-            Seg("TCP", !http, Modifier.weight(1f)) { http = false; Store.pingHttp(ctx, false) }
-            Seg("HTTP GET", http, Modifier.weight(1f)) { http = true; Store.pingHttp(ctx, true) }
-        }
-        Text("URL-ТЕСТ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
-        OutlinedTextField(url, { url = it; Store.testUrl(ctx, it) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
         Text("DNS", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        Text("Запросы уходят через туннель", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.padding(top = 8.dp)) {
             listOf("auto" to "Авто", "cf" to "1.1.1.1", "gg" to "8.8.8.8", "own" to "Свой").forEach { (id, label) ->
                 Seg(label, dns == id, Modifier.weight(1f)) { dns = id; Store.dnsMode(ctx, id); onApply() }
@@ -989,57 +968,46 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
             if (it.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) onApply()
         }, placeholder = { Text("9.9.9.9") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
         Text("СОЕДИНЕНИЕ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
-        var mux by remember { mutableStateOf(Store.useMux(ctx)) }
-        var frag by remember { mutableStateOf(Store.useFragment(ctx)) }
-        var mtu by remember { mutableStateOf(Store.mtuLow(ctx)) }
-        var fake by remember { mutableStateOf(Store.useFakeDns(ctx)) }
-        var doh by remember { mutableStateOf(Store.useDoH(ctx)) }
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Mux", color = Color.White, modifier = Modifier.weight(1f))
+            Text("Mux (не для vision)", color = Color.White, modifier = Modifier.weight(1f))
             Switch(mux, { mux = it; Store.useMux(ctx, it); onApply() })
-        }
-        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Fragmentation", color = Color.White, modifier = Modifier.weight(1f))
-            Switch(frag, { frag = it; Store.useFragment(ctx, it); onApply() })
         }
         Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("MTU 1400", color = Color.White, modifier = Modifier.weight(1f))
             Switch(mtu, { mtu = it; Store.mtuLow(ctx, it); onApply() })
         }
-        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("FakeDNS", color = Color.White, modifier = Modifier.weight(1f))
-            Switch(fake, { fake = it; Store.useFakeDns(ctx, it); onApply() })
-        }
-        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("DNS DoH", color = Color.White, modifier = Modifier.weight(1f))
-            Switch(doh, { doh = it; Store.useDoH(ctx, it); onApply() })
-        }
-        var raw by remember { mutableStateOf(Store.rawMode(ctx)) }
-        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Как в подписке", color = Color.White, modifier = Modifier.weight(1f))
-            Switch(raw, { raw = it; Store.rawMode(ctx, it); onApply() })
-        }
         Text("ЯДРО", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
-        Text("sing-box-lx 1.14.4 (тест, XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))
+        Text("sing-box-lx 1.14.4 (XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))
+        Text(
+            if (BuildConfig.CORE_LOG) "лог ядра включён (debug)" else "лог ядра выключен (release)",
+            color = Muted,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp)
+        )
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        Text("Эти домены идут напрямую, мимо VPN", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(site, { site = it }, placeholder = { Text("bank.ru") }, modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
             Text("добавить", color = Color.White, modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
                 val host = site.trim().lowercase().removePrefix("https://").removePrefix("http://").substringBefore("/")
-                if (host.isNotBlank() && host !in hosts) { hosts = hosts + host; Store.bypass(ctx, hosts); site = ""; onApply() }
+                if (host.isNotBlank() && host !in hosts) {
+                    hosts = hosts + host
+                    Store.bypass(ctx, hosts)
+                    site = ""
+                    onApply()
+                }
             }.padding(horizontal = 12.dp, vertical = 12.dp))
         }
         hosts.forEach { host ->
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(host, color = Color.White)
-                Text("убрать", color = Color(0xFFF87171), modifier = Modifier.clickable { hosts = hosts - host; Store.bypass(ctx, hosts); onApply() })
+                Text("убрать", color = Color(0xFFF87171), modifier = Modifier.clickable {
+                    hosts = hosts - host
+                    Store.bypass(ctx, hosts)
+                    onApply()
+                })
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(14.dp)).background(if (ignoreGeo) Purple.copy(.35f) else Elev).clickable { onGeo(!ignoreGeo) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (ignoreGeo) "Гео-базы игнорируются" else "Гео-базы включены", color = Color.White, modifier = Modifier.weight(1f))
-            Text(if (ignoreGeo) "вкл" else "выкл", color = Cyan)
-        }
-        var logOpen by remember { mutableStateOf(false) }
         Row(Modifier.fillMaxWidth().padding(top = 16.dp).clickable { logOpen = !logOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("ЛОГ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
             Text(if (logOpen) "свернуть" else "развернуть", color = Cyan, fontSize = 12.sp)
@@ -1065,63 +1033,6 @@ private fun Seg(label: String, on: Boolean, modifier: Modifier, click: () -> Uni
     Box(modifier.padding(horizontal = 2.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.28f) else Elev).clickable { click() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
         Text(label, color = Color.White, fontSize = 12.sp)
     }
-}
-
-private fun cabinetWebView(context: Context, tag: String): WebView {
-    return WebView(context).apply {
-        setBackgroundColor(0xFF040D1A.toInt())
-        setLayerType(android.view.View.LAYER_TYPE_NONE, null)
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.loadsImagesAutomatically = true
-        settings.useWideViewPort = true
-        settings.loadWithOverviewMode = true
-        webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                if (msg != null) VpnLog.add("$tag js: ${msg.message()} @${msg.lineNumber()}")
-                return true
-            }
-        }
-        webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                VpnLog.add("$tag start: $url")
-            }
-            override fun onPageFinished(view: WebView?, url: String?) {
-                VpnLog.add("$tag html loaded: $url")
-            }
-            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
-                if (request.isForMainFrame) VpnLog.add("$tag error ${error.errorCode}: ${error.description} (${request.url})")
-            }
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return false
-                VpnLog.add("$tag navigate: $url")
-                if (url.contains("pay") || url.contains("payment") || url.contains("checkout") || url.contains("yookassa") || url.contains("cloudpayments")) {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    return true
-                }
-                return false
-            }
-        }
-        VpnLog.add("$tag loadUrl")
-        injectCookies(this)
-        loadUrl("https://my.wingerapp.pro")
-    }
-}
-
-private fun injectCookies(web: WebView) {
-    val cm = CookieManager.getInstance()
-    cm.setAcceptCookie(true)
-    cm.setAcceptThirdPartyCookies(web, true)
-    val raw = Store.cookies(Api.app)
-    if (raw.isBlank()) return
-    raw.lineSequence().filter { it.contains("|") }.forEach { line ->
-        val p = line.split("|", limit = 3)
-        if (p.size < 3) return@forEach
-        val domain = p[0].ifBlank { "my.wingerapp.pro" }
-        val cookie = "${p[1]}=${p[2]}; domain=$domain; path=/"
-        cm.setCookie("https://$domain/", cookie)
-    }
-    cm.flush()
 }
 
 private fun grouped(servers: List<ServerNode>): List<Pair<String, List<ServerNode>>> {
@@ -1150,7 +1061,7 @@ private fun daysLeft(expires: String?): String {
     return runCatching {
         val d = java.time.LocalDate.parse(expires.take(10))
         val n = java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
-        "$n дней"
+        "$n ${dayWord(n)}"
     }.getOrDefault("—")
 }
 
