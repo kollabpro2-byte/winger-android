@@ -110,6 +110,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         VpnLog.init(this)
+        CrashGuard.install()
+        Diag.harvestCrash(this)
+        Diag.harvestCoreLog(this, rotate = !WingerVpnService.coreRunning)
+        Diag.logExitReasons(this)
         VpnLog.add("app start")
         pro.wingerapp.vpn.net.Api.init(this)
         setContent { App(this, hwid(), ::connect, ::disconnect) }

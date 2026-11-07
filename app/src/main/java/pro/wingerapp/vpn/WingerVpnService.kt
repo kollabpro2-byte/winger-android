@@ -8,7 +8,9 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
+import android.os.Debug
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.OsConstants
 import go.Seq
 import io.nekohasekai.libbox.CommandServer
@@ -34,18 +36,18 @@ class WingerVpnService : VpnService() {
     private var singServer: CommandServer? = null
     private val generation = java.util.concurrent.atomic.AtomicInteger()
     private var ifaceListener: InterfaceUpdateListener? = null
+    private val rate = LogRate()
 
     override fun onCreate() {
         super.onCreate()
-        val prev = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            runCatching { VpnLog.add("CRASH ${t.name}: ${e.javaClass.simpleName}: ${e.message}") }
-            prev?.uncaughtException(t, e)
-        }
+        VpnLog.init(this)
+        CrashGuard.install()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         VpnLog.init(this)
+        CrashGuard.install()
+        Diag.harvestCrash(this)
         if (intent?.action == "STOP") { generation.incrementAndGet(); Store.running(this, false); stopCore(); stopSelf(); return START_NOT_STICKY }
         startForeground(1, note())
         val config = intent?.getStringExtra(EXTRA_CONFIG)
@@ -60,7 +62,7 @@ class WingerVpnService : VpnService() {
                 startSingBox(config, gen)
             } catch (e: Throwable) {
                 if (generation.get() != gen) return@Thread
-                VpnLog.add("ошибка старта: ${e.javaClass.simpleName}: ${e.message}")
+                VpnLog.add("ошибка старта: ${err(e)}\n${e.stackTraceToString().take(1500)}")
                 Store.running(this, false)
                 stopCore()
             }
@@ -80,13 +82,23 @@ class WingerVpnService : VpnService() {
 
     private fun startSingBox(config: String, gen: Int) {
         Seq.setContext(applicationContext)
+        Diag.harvestCrash(this)
+        Diag.harvestCoreLog(this, rotate = true)
         val opts = SetupOptions()
         opts.basePath = filesDir.absolutePath
         opts.workingPath = filesDir.absolutePath
         opts.tempPath = cacheDir.absolutePath
         opts.fixAndroidStack = true
+        opts.crashReportSource = "winger"
+        opts.appVersion = BuildConfig.VERSION_NAME
+        opts.debug = false
+        val ver = runCatching { Libbox.version() }.getOrElse { "?" }
+        VpnLog.add("libbox $ver redirectStderr: нет в Java API, Setup пишет CrashReport-winger.log, debug=false")
+        VpnLog.add("sing-box file log ${if (CORE_FILE_LOG) "warn -> singbox.log" else "выключен (CORE_FILE_LOG=false)"}")
         Libbox.setup(opts)
-        val sbConfig = toSingBox(config)
+        val logFile = File(filesDir, "singbox.log").absolutePath
+        val sbConfig = toSingBox(config, logFile)
+        VpnLog.add(summarizeSingBox(sbConfig))
         VpnLog.add("sing-box конфиг ${sbConfig.length} байт")
         val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
         singServer = server
@@ -95,26 +107,48 @@ class WingerVpnService : VpnService() {
         try {
             server.startOrReloadService(sbConfig, OverrideOptions())
         } catch (e: Throwable) {
-            VpnLog.add("startOrReload ошибка: ${e.javaClass.simpleName}: ${e.message}")
+            VpnLog.add("startOrReload ошибка: ${err(e)}\n${e.stackTraceToString().take(1500)}")
             throw e
         }
         if (generation.get() != gen) return
         Store.running(this, true)
+        coreRunning = true
         VpnLog.add("ядро запущено")
+        startHeartbeat(gen)
+    }
+
+    private fun startHeartbeat(gen: Int) {
         Thread {
-            for (i in 1..8) {
-                Thread.sleep(1000)
+            val start = SystemClock.elapsedRealtime()
+            var delay = 3_000L
+            while (generation.get() == gen) {
+                try {
+                    Thread.sleep(delay)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
                 if (generation.get() != gen) return@Thread
-                VpnLog.add("alive ${i}s")
+                val sec = ((SystemClock.elapsedRealtime() - start) / 1000).toInt()
+                val heap = Debug.getNativeHeapAllocatedSize()
+                val threads = Thread.activeCount()
+                val traffic = runCatching { tunTraffic() }.getOrNull()
+                val rx = traffic?.first?.toString() ?: "?"
+                val tx = traffic?.second?.toString() ?: "?"
+                VpnLog.add("alive ${sec}s heap=$heap threads=$threads rx=$rx tx=$tx")
+                delay = if (sec < 60) 3_000L else 15_000L
             }
+        }.apply {
+            name = "vpn-heartbeat"
+            isDaemon = true
         }.start()
     }
 
     private fun stopCore() {
-        runCatching { singServer?.closeService() }
-        runCatching { singServer?.close() }
+        coreRunning = false
+        runCatching { singServer?.closeService() }.onFailure { VpnLog.add("closeService: ${err(it)}") }
+        runCatching { singServer?.close() }.onFailure { VpnLog.add("server.close: ${err(it)}") }
         singServer = null
-        tun?.close()
+        runCatching { tun?.close() }.onFailure { VpnLog.add("tun.close: ${err(it)}") }
         tun = null
     }
 
@@ -164,17 +198,25 @@ class WingerVpnService : VpnService() {
     private fun validPrefix(host: String, prefix: Short): String? {
         val h = host.substringBefore('%')
         if (h.isBlank() || prefix !in 0..128) return null
-        return runCatching {
+        return try {
             val addr = InetAddress.getByName(h)
             val bits = if (addr is java.net.Inet4Address) 32 else 128
             if (prefix > bits) return null
             "$h/$prefix"
-        }.getOrNull()
+        } catch (e: Throwable) {
+            if (rate.allow("prefix", 10_000)) VpnLog.add("prefix $h/$prefix: ${err(e)}")
+            null
+        }
     }
 
     private fun collectInterfaces(): List<io.nekohasekai.libbox.NetworkInterface> {
         val cm = getSystemService(ConnectivityManager::class.java)
-        val javaIfs = runCatching { JavaNetworkInterface.getNetworkInterfaces().toList() }.getOrNull().orEmpty()
+        val javaIfs = try {
+            JavaNetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+        } catch (e: Throwable) {
+            VpnLog.add("java ifaces: ${err(e)}")
+            emptyList()
+        }
         val result = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
         for (network in cm.allNetworks) {
             val lp = cm.getLinkProperties(network) ?: continue
@@ -185,7 +227,12 @@ class WingerVpnService : VpnService() {
             val box = io.nekohasekai.libbox.NetworkInterface()
             box.name = name
             box.index = jni?.index ?: (result.size + 1)
-            box.mtu = runCatching { jni?.mtu }.getOrNull() ?: 1500
+            box.mtu = try {
+                jni?.mtu ?: 1500
+            } catch (e: Throwable) {
+                if (rate.allow("mtu-$name", 10_000)) VpnLog.add("mtu $name: ${err(e)}")
+                1500
+            }
             val addrs = jni?.interfaceAddresses?.mapNotNull { ia ->
                 val host = ia.address.hostAddress ?: return@mapNotNull null
                 validPrefix(host, ia.networkPrefixLength)
@@ -204,56 +251,175 @@ class WingerVpnService : VpnService() {
             box.flags = flags
             box.metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             result.add(box)
-            VpnLog.add("iface $name idx=${box.index} addrs=${addrs.size}")
+            if (rate.allow("iface-$name", 8_000)) VpnLog.add("iface $name idx=${box.index} addrs=${addrs.size} type=${box.type}")
         }
         return result
     }
 
     private fun notifyDefault() {
-        runCatching {
+        try {
             val cm = getSystemService(ConnectivityManager::class.java)
-            val network = cm.activeNetwork ?: return
-            val lp = cm.getLinkProperties(network) ?: return
-            val name = lp.interfaceName ?: return
-            val jni = runCatching { JavaNetworkInterface.getByName(name) }.getOrNull()
+            val network = cm.activeNetwork
+            if (network == null) {
+                if (rate.allow("def-none", 5_000)) VpnLog.add("notifyDefault: нет activeNetwork")
+                return
+            }
+            val lp = cm.getLinkProperties(network)
+            if (lp == null) {
+                VpnLog.add("notifyDefault: нет linkProperties")
+                return
+            }
+            val name = lp.interfaceName
+            if (name.isNullOrBlank()) {
+                VpnLog.add("notifyDefault: нет interfaceName")
+                return
+            }
+            val jni = try {
+                JavaNetworkInterface.getByName(name)
+            } catch (e: Throwable) {
+                VpnLog.add("notifyDefault getByName($name): ${err(e)}")
+                null
+            }
             val idx = jni?.index ?: 1
-            ifaceListener?.updateDefaultInterface(name, idx, false, false)
+            val listener = ifaceListener
+            if (listener == null) {
+                VpnLog.add("notifyDefault: нет listener ($name idx=$idx)")
+                return
+            }
+            listener.updateDefaultInterface(name, idx, false, false)
+            if (rate.allow("def-ok", 5_000)) VpnLog.add("notifyDefault $name idx=$idx")
+        } catch (e: Throwable) {
+            VpnLog.add("notifyDefault FAIL: ${err(e)}")
         }
     }
 
-    private inner class BoxPlatform : PlatformInterface {
-        override fun openTun(options: TunOptions): Int = runCatching { openTun() }.getOrElse { -1 }
-        override fun autoDetectInterfaceControl(fd: Int) { runCatching { protect(fd) } }
-        override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-        override fun includeAllNetworks(): Boolean = false
-        override fun underNetworkExtension(): Boolean = false
-        override fun usePlatformBridge(): Boolean = false
-        override fun usePlatformShell(): Boolean = false
-        override fun tailscaleHostname(): String = ""
-        override fun clearDNSCache() {}
-        override fun registerMyInterface(name: String) {}
-        override fun cancelNotification(identifier: String, typeId: Int) {}
-        override fun checkPlatformShell() {}
-        override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) { ifaceListener = null }
-        override fun closeNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {}
-        override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-            ifaceListener = listener
-            notifyDefault()
+    private fun err(t: Throwable) = "${t.javaClass.simpleName}: ${t.message}"
+
+    private fun tunSummary(options: TunOptions): String = try {
+        val addr = prefixList(options.inet4Address)
+        val routes = prefixList(options.inet4RouteAddress)
+        val dns = runCatching { options.dnsMode?.value }.getOrNull()
+        "mtu=${options.mtu} autoRoute=${options.autoRoute} strict=${options.strictRoute} addr=${addr.joinToString(",")} routes=${routes.size} dns=$dns"
+    } catch (e: Throwable) {
+        "options unreadable: ${err(e)}"
+    }
+
+    private fun prefixList(it: io.nekohasekai.libbox.RoutePrefixIterator?): List<String> {
+        if (it == null) return emptyList()
+        val out = ArrayList<String>(4)
+        var n = 0
+        while (it.hasNext() && n < 6) {
+            out += try {
+                it.next()?.string() ?: "?"
+            } catch (e: Throwable) {
+                "?"
+            }
+            n++
         }
-        override fun startNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {}
-        override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {}
-        override fun readWIFIState(): WIFIState = WIFIState("", "")
+        return out
+    }
+
+    private inner class BoxPlatform : PlatformInterface {
+        override fun openTun(options: TunOptions): Int {
+            val summary = tunSummary(options)
+            return try {
+                val fd = openTun()
+                VpnLog.add("openTun ok fd=$fd $summary")
+                fd
+            } catch (e: Throwable) {
+                VpnLog.add("openTun FAIL возвращаю -1 ($summary): ${err(e)}\n${e.stackTraceToString().take(800)}")
+                -1
+            }
+        }
+        override fun autoDetectInterfaceControl(fd: Int) {
+            try {
+                val ok = protect(fd)
+                if (!ok) VpnLog.add("protect($fd)=false")
+                else if (rate.allow("protect-ok", 5_000)) VpnLog.add("protect($fd)=true")
+            } catch (e: Throwable) {
+                VpnLog.add("protect($fd) exception: ${err(e)}")
+            }
+        }
+        override fun usePlatformAutoDetectInterfaceControl(): Boolean {
+            if (rate.allow("cap-protect", 60_000)) VpnLog.add("usePlatformAutoDetectInterfaceControl=true")
+            return true
+        }
+        override fun includeAllNetworks(): Boolean {
+            if (rate.allow("cap-all", 60_000)) VpnLog.add("includeAllNetworks=false")
+            return false
+        }
+        override fun underNetworkExtension(): Boolean {
+            if (rate.allow("cap-ext", 60_000)) VpnLog.add("underNetworkExtension=false")
+            return false
+        }
+        override fun usePlatformBridge(): Boolean {
+            if (rate.allow("cap-bridge", 60_000)) VpnLog.add("usePlatformBridge=false")
+            return false
+        }
+        override fun usePlatformShell(): Boolean {
+            if (rate.allow("cap-shell", 60_000)) VpnLog.add("usePlatformShell=false")
+            return false
+        }
+        override fun tailscaleHostname(): String = ""
+        override fun clearDNSCache() { VpnLog.add("clearDNSCache") }
+        override fun registerMyInterface(name: String) { VpnLog.add("registerMyInterface $name") }
+        override fun cancelNotification(identifier: String, typeId: Int) {
+            VpnLog.add("cancelNotification $identifier type=$typeId")
+        }
+        override fun checkPlatformShell() { VpnLog.add("checkPlatformShell") }
+        override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+            VpnLog.add("closeDefaultInterfaceMonitor")
+            ifaceListener = null
+        }
+        override fun closeNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {
+            if (rate.allow("neigh-close", 30_000)) VpnLog.add("closeNeighborMonitor")
+        }
+        override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+            VpnLog.add("startDefaultInterfaceMonitor")
+            ifaceListener = listener
+            try {
+                notifyDefault()
+            } catch (e: Throwable) {
+                VpnLog.add("startDefaultInterfaceMonitor notify: ${err(e)}")
+            }
+        }
+        override fun startNeighborMonitor(listener: io.nekohasekai.libbox.NeighborUpdateListener) {
+            if (rate.allow("neigh-start", 30_000)) VpnLog.add("startNeighborMonitor")
+        }
+        override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {
+            val title = notification?.title?.take(80) ?: "-"
+            VpnLog.add("sendNotification $title")
+        }
+        override fun readWIFIState(): WIFIState {
+            if (rate.allow("wifi", 30_000)) VpnLog.add("readWIFIState empty")
+            return WIFIState("", "")
+        }
         override fun readSystemSSHHostKey(): String = ""
         override fun lookupSFTPServer(): String = ""
-        override fun lookupUser(name: String): io.nekohasekai.libbox.PlatformUser? = null
-        override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions): io.nekohasekai.libbox.BridgeSession =
+        override fun lookupUser(name: String): io.nekohasekai.libbox.PlatformUser? {
+            if (rate.allow("user", 30_000)) VpnLog.add("lookupUser $name -> null")
+            return null
+        }
+        override fun createBridge(options: io.nekohasekai.libbox.BridgeOptions): io.nekohasekai.libbox.BridgeSession {
+            VpnLog.add("createBridge не поддерживается")
             throw UnsupportedOperationException("bridge")
-        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): io.nekohasekai.libbox.ConnectionOwner? = null
-        override fun openShellSession(user: io.nekohasekai.libbox.PlatformUser, path: String, args: StringIterator, dir: String, uid: Int, gid: Int): io.nekohasekai.libbox.ShellSession =
+        }
+        override fun findConnectionOwner(ipProtocol: Int, sourceAddress: String, sourcePort: Int, destinationAddress: String, destinationPort: Int): io.nekohasekai.libbox.ConnectionOwner? {
+            if (rate.allow("owner", 10_000)) VpnLog.add("findConnectionOwner -> null")
+            return null
+        }
+        override fun openShellSession(user: io.nekohasekai.libbox.PlatformUser, path: String, args: StringIterator, dir: String, uid: Int, gid: Int): io.nekohasekai.libbox.ShellSession {
+            VpnLog.add("openShellSession не поддерживается")
             throw UnsupportedOperationException("shell")
+        }
         override fun getInterfaces(): NetworkInterfaceIterator {
-            val list = runCatching { collectInterfaces() }.getOrElse { emptyList() }
-            VpnLog.add("interfaces: ${list.size}")
+            val list = try {
+                collectInterfaces()
+            } catch (e: Throwable) {
+                VpnLog.add("getInterfaces FAIL: ${err(e)}\n${e.stackTraceToString().take(800)}")
+                emptyList()
+            }
+            if (list.isEmpty() || rate.allow("ifaces", 5_000)) VpnLog.add("interfaces: ${list.size}")
             return object : NetworkInterfaceIterator {
                 private var i = 0
                 override fun hasNext(): Boolean = i < list.size
@@ -262,12 +428,24 @@ class WingerVpnService : VpnService() {
         }
         override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
             override fun raw(): Boolean = false
-            override fun exchange(ctx: ExchangeContext, message: ByteArray) { runCatching { ctx.errorCode(1) } }
+            override fun exchange(ctx: ExchangeContext, message: ByteArray) {
+                try {
+                    ctx.errorCode(1)
+                    if (rate.allow("dns-ex", 3_000)) VpnLog.add("dns exchange -> error 1 (${message.size} байт)")
+                } catch (e: Throwable) {
+                    if (rate.allow("dns-ex-err", 3_000)) VpnLog.add("dns exchange FAIL: ${err(e)}")
+                }
+            }
             override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
-                runCatching {
+                try {
                     val host = domain.trim().trimEnd('.')
                     val ip = InetAddress.getAllByName(host).firstOrNull()?.hostAddress
-                    if (ip.isNullOrBlank()) ctx.errorCode(1) else ctx.success(ip)
+                    if (ip.isNullOrBlank()) {
+                        ctx.errorCode(1)
+                        if (rate.allow("dns-miss", 3_000)) VpnLog.add("dns lookup miss $network $host")
+                    } else ctx.success(ip)
+                } catch (e: Throwable) {
+                    if (rate.allow("dns-lookup", 3_000)) VpnLog.add("dns lookup FAIL $network $domain: ${err(e)}")
                 }
             }
         }
@@ -275,14 +453,18 @@ class WingerVpnService : VpnService() {
 
     private inner class BoxHandler : CommandServerHandler {
         override fun writeDebugMessage(message: String?) {
-            // completely swallow to avoid native panics in TUN mode
+            // swallow: Java callback from Go panicked in TUN mode. debug stays false so this is not called.
         }
-        override fun serviceReload() {}
-        override fun serviceStop() { VpnLog.add("sing-box: service stop") }
-        override fun setSystemProxyEnabled(enabled: Boolean) {}
-        override fun connectSSHAgent(): Int = throw UnsupportedOperationException("ssh")
-        override fun triggerNativeCrash() {}
+        override fun serviceReload() { VpnLog.add("sing-box: serviceReload") }
+        override fun serviceStop() { VpnLog.add("sing-box: serviceStop") }
+        override fun setSystemProxyEnabled(enabled: Boolean) { VpnLog.add("setSystemProxyEnabled=$enabled") }
+        override fun connectSSHAgent(): Int {
+            VpnLog.add("connectSSHAgent не поддерживается")
+            throw UnsupportedOperationException("ssh")
+        }
+        override fun triggerNativeCrash() { VpnLog.add("triggerNativeCrash вызван") }
         override fun getSystemProxyStatus(): SystemProxyStatus {
+            if (rate.allow("proxy-status", 30_000)) VpnLog.add("getSystemProxyStatus available=false enabled=false")
             val status = SystemProxyStatus()
             status.setAvailable(false)
             status.setEnabled(false)
@@ -297,5 +479,8 @@ class WingerVpnService : VpnService() {
         override fun len(): Int = items.size
     }
 
-    companion object { const val EXTRA_CONFIG = "config" }
+    companion object {
+        const val EXTRA_CONFIG = "config"
+        @Volatile var coreRunning: Boolean = false
+    }
 }

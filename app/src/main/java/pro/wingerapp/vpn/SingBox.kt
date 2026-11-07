@@ -3,14 +3,22 @@ package pro.wingerapp.vpn
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * sing-box file log. Kept off: libbox always feeds log lines into CommandServer's
+ * platform writer, and that path panicked in TUN mode. A file `output` does not
+ * detach the writer. writeDebugMessage itself runs only when SetupOptions.debug
+ * is true, which this app does not set. Flip the flag to also write warn logs
+ * to [toSingBox]'s coreLogFile.
+ */
+const val CORE_FILE_LOG = false
+
 /** Convert Xray config to minimal sing-box config with TUN. */
-fun toSingBox(xrayJson: String): String {
+fun toSingBox(xrayJson: String, coreLogFile: String? = null): String {
     val xray = JSONObject(xrayJson)
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
-    val proxy = firstVless(outbounds) ?: return minimalTun()
+    val proxy = firstVless(outbounds) ?: return minimalTun(coreLogFile)
     val sb = JSONObject()
-    // logging disabled: known native panic in TUN mode when Go writes via CommandServer
-    sb.put("log", JSONObject().put("disabled", true))
+    sb.put("log", coreLog(coreLogFile))
     sb.put("inbounds", JSONArray().put(JSONObject()
         .put("type", "tun")
         .put("tag", "tun-in")
@@ -27,6 +35,54 @@ fun toSingBox(xrayJson: String): String {
             .put(JSONObject().put("action", "sniff"))
             .put(JSONObject().put("action", "route").put("outbound", "proxy"))))
     return sb.toString()
+}
+
+/** Short config summary. Omits uuid, keys, short id, and passwords. */
+fun summarizeSingBox(sbConfig: String): String = try {
+    val o = JSONObject(sbConfig)
+    val inbounds = o.optJSONArray("inbounds") ?: JSONArray()
+    var tun = false
+    var tunAddr = "-"
+    val inDesc = ArrayList<String>(inbounds.length())
+    for (i in 0 until inbounds.length()) {
+        val ib = inbounds.optJSONObject(i) ?: continue
+        val type = ib.optString("type", "?")
+        val addr = ib.opt("address")?.toString()?.take(80).orEmpty()
+        if (type == "tun") {
+            tun = true
+            if (addr.isNotBlank()) tunAddr = addr
+        }
+        inDesc += if (addr.isBlank()) type else "$type $addr"
+    }
+    val outs = o.optJSONArray("outbounds") ?: JSONArray()
+    val outDesc = ArrayList<String>(outs.length())
+    var proxyLine = "proxy=-"
+    for (i in 0 until outs.length()) {
+        val ob = outs.optJSONObject(i) ?: continue
+        val type = ob.optString("type", "?")
+        val tag = ob.optString("tag")
+        outDesc += "$type/$tag"
+        if (tag == "proxy" || type == "vless") {
+            val host = ob.optString("server")
+            val port = ob.optInt("server_port", 0)
+            val transport = ob.optJSONObject("transport")?.optString("type").orEmpty().ifBlank { "-" }
+            val tls = ob.optJSONObject("tls")
+            val tlsOn = tls?.optBoolean("enabled") == true
+            val reality = tls?.optJSONObject("reality")?.optBoolean("enabled") == true
+            val flow = ob.optString("flow").ifBlank { "-" }
+            proxyLine = "proxy=$host:$port transport=$transport tls=$tlsOn reality=$reality flow=$flow"
+        }
+    }
+    val dns = o.has("dns") && !o.isNull("dns")
+    val rules = o.optJSONObject("route")?.optJSONArray("rules")?.length() ?: 0
+    "cfg tun=$tun addr=$tunAddr in=[${inDesc.joinToString(",")}] out=[${outDesc.joinToString(",")}] $proxyLine dns=$dns rules=$rules"
+} catch (e: Throwable) {
+    "cfg summary fail: ${e.javaClass.simpleName}: ${e.message}"
+}
+
+private fun coreLog(path: String?): JSONObject {
+    if (!CORE_FILE_LOG || path.isNullOrBlank()) return JSONObject().put("disabled", true)
+    return JSONObject().put("level", "warn").put("output", path).put("timestamp", true)
 }
 
 private fun firstVless(obs: JSONArray): JSONObject? {
@@ -73,8 +129,8 @@ private fun convertVless(xray: JSONObject): JSONObject {
     return sb
 }
 
-private fun minimalTun(): String = JSONObject()
-    .put("log", JSONObject().put("disabled", true))
+private fun minimalTun(coreLogFile: String? = null): String = JSONObject()
+    .put("log", coreLog(coreLogFile))
     .put("inbounds", JSONArray().put(JSONObject()
         .put("type", "tun")
         .put("tag", "tun-in")
