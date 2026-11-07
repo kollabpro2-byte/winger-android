@@ -230,6 +230,7 @@ class WingerVpnService : VpnService() {
                 private var i = 0
                 override fun hasNext(): Boolean = i < list.size
                 override fun next(): io.nekohasekai.libbox.NetworkInterface = list[i++]
+                override fun len(): Int = list.size
             }
         }
         override fun localDNSTransport(): LocalDNSTransport = object : LocalDNSTransport {
@@ -262,6 +263,7 @@ class WingerVpnService : VpnService() {
         private var i = 0
         override fun hasNext(): Boolean = i < items.size
         override fun next(): String = items[i++]
+        override fun len(): Int = items.size
     }
 
     companion object { const val EXTRA_CONFIG = "config" }
