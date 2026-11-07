@@ -101,6 +101,14 @@ class WingerVpnService : VpnService() {
         if (generation.get() != gen) return
         Store.running(this, true)
         VpnLog.add("ядро запущено")
+        // heartbeat to confirm process stays alive after start
+        Thread {
+            for (i in 1..6) {
+                Thread.sleep(1000)
+                if (generation.get() != gen) return@Thread
+                VpnLog.add("alive ${i}s")
+            }
+        }.start()
     }
 
     private fun stopCore() {
@@ -263,7 +271,10 @@ class WingerVpnService : VpnService() {
     }
 
     private inner class BoxHandler : CommandServerHandler {
-        override fun writeDebugMessage(message: String?) { if (!message.isNullOrBlank()) VpnLog.add("sing-box: $message") }
+        override fun writeDebugMessage(message: String?) {
+            // swallow: logging path has caused native panics in TUN mode
+            runCatching { if (!message.isNullOrBlank()) VpnLog.add("sing-box: ${message.take(200)}") }
+        }
         override fun serviceReload() {}
         override fun serviceStop() { VpnLog.add("sing-box: service stop") }
         override fun setSystemProxyEnabled(enabled: Boolean) {}
