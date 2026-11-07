@@ -13,7 +13,12 @@ object VpnLog {
         if (!::file.isInitialized) return
         val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         file.appendText("$ts $line\n")
+        // keep file from growing forever
+        if (file.length() > 64_000) {
+            val lines = file.readLines()
+            file.writeText(lines.takeLast(200).joinToString("\n") + "\n")
+        }
     }
-    fun text(): String = if (::file.isInitialized && file.exists()) file.readText().takeLast(4000) else "лога нет"
+    fun text(): String = if (::file.isInitialized && file.exists()) file.readText().takeLast(12_000) else "лога нет"
     fun clear() { if (::file.isInitialized) file.writeText("") }
 }
