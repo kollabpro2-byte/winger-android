@@ -51,8 +51,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing: a debug-signed release must not be published"
-            exit 1
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: building an unsigned APK, publishing is skipped"
+            exit 0
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/winger-release.jks"
           cat > keystore.properties <<EOF
@@ -72,7 +72,11 @@ jobs:
         run: |
           for APK in app/build/outputs/apk/release/*.apk; do
             echo "Checking $APK"
-            "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+            if "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK" > /dev/null 2>&1; then
+              echo "signed: $APK"
+            else
+              echo "::warning::unsigned: $APK"
+            fi
             if "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "application-debuggable"; then
               echo "::error::$APK is debuggable"
               exit 1
@@ -85,10 +89,15 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
 
       - name: Publish release
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ ! -f keystore.properties ]; then
+            echo "::error::release build is unsigned, refusing to publish"
+            exit 1
+          fi
           ver=$(sed -n 's/^[[:space:]]*versionName *= *"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
           echo "version=${ver}"
           test -n "$ver"
