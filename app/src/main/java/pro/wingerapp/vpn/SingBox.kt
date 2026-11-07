@@ -4,13 +4,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * sing-box file log. Kept off: libbox always feeds log lines into CommandServer's
- * platform writer, and that path panicked in TUN mode. A file `output` does not
- * detach the writer. writeDebugMessage itself runs only when SetupOptions.debug
- * is true, which this app does not set. Flip the flag to also write warn logs
- * to [toSingBox]'s coreLogFile.
+ * sing-box file log. Enabled for diagnosis. libbox feeds log lines into
+ * CommandServer platform writer; that path can panic in TUN mode if debug=true.
+ * File output is separate. Flip back to false after diagnosis.
  */
-const val CORE_FILE_LOG = false
+const val CORE_FILE_LOG = true
 
 /** Convert Xray config to minimal sing-box config with TUN. */
 fun toSingBox(xrayJson: String, coreLogFile: String? = null, dnsServer: String = "1.1.1.1"): String {
@@ -81,7 +79,7 @@ fun summarizeSingBox(sbConfig: String): String = try {
 
 private fun coreLog(path: String?): JSONObject {
     if (!CORE_FILE_LOG || path.isNullOrBlank()) return JSONObject().put("disabled", true)
-    return JSONObject().put("level", "warn").put("output", path).put("timestamp", true)
+    return JSONObject().put("level", "debug").put("output", path).put("timestamp", true)
 }
 
 private fun firstVless(obs: JSONArray): JSONObject? {
