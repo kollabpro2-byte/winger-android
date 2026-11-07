@@ -1051,6 +1051,10 @@ private fun SettingsTab(ctx: Context, ignoreGeo: Boolean, onGeo: (Boolean) -> Un
                 Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
                     ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
                 }.padding(10.dp)) { Text("Скопировать", color = Color.White) }
+                Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF8B3A3A)).clickable {
+                    VpnLog.clear()
+                    log = ""
+                }.padding(10.dp)) { Text("Очистить", color = Color.White) }
             }
         }
     }

@@ -356,12 +356,16 @@ class WingerVpnService : VpnService() {
     private inner class BoxPlatform : PlatformInterface {
         override fun openTun(options: TunOptions): Int {
             return try {
-                val fd = openTun(options)
+                val fd = this@WingerVpnService.openTun(options)
+                if (fd < 0) {
+                    VpnLog.add("openTun вернул плохой fd=$fd, бросаю")
+                    error("bad tun fd=$fd")
+                }
                 VpnLog.add("openTun ok fd=$fd")
                 fd
             } catch (e: Throwable) {
-                VpnLog.add("openTun FAIL возвращаю -1: ${err(e)}\n${e.stackTraceToString().take(800)}")
-                -1
+                VpnLog.add("openTun FAIL: ${err(e)}\n${e.stackTraceToString().take(800)}")
+                throw e
             }
         }
         override fun autoDetectInterfaceControl(fd: Int) {
