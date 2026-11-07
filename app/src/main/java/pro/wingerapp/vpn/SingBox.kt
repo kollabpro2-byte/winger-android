@@ -111,6 +111,30 @@ private fun convertVless(xray: JSONObject): JSONObject {
         xhttp.optString("path").takeIf { it.isNotBlank() }?.let { transport.put("path", it) }
         xhttp.optString("mode").takeIf { it.isNotBlank() }?.let { transport.put("mode", it) }
         xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
+        val extra = xhttp.optJSONObject("extra")
+        if (extra != null) {
+            extra.optString("uplinkHTTPMethod").takeIf { it.isNotBlank() }?.let { transport.put("uplink_http_method", it) }
+            extra.optString("xPaddingBytes").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_bytes", it) }
+            if (extra.has("xPaddingObfsMode")) transport.put("x_padding_obfs_mode", extra.optBoolean("xPaddingObfsMode"))
+            extra.optString("xPaddingPlacement").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_placement", it) }
+            extra.optString("xPaddingKey").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_key", it) }
+            extra.optString("xPaddingHeader").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_header", it) }
+            extra.optString("xPaddingMethod").takeIf { it.isNotBlank() }?.let { transport.put("x_padding_method", it) }
+            extra.optString("seqPlacement").takeIf { it.isNotBlank() }?.let { transport.put("seq_placement", it) }
+            extra.optString("seqKey").takeIf { it.isNotBlank() }?.let { transport.put("seq_key", it) }
+            extra.optString("sessionPlacement").takeIf { it.isNotBlank() }?.let { transport.put("session_placement", it) }
+            extra.optString("sessionKey").takeIf { it.isNotBlank() }?.let { transport.put("session_key", it) }
+            extra.optString("sessionIDKey").takeIf { it.isNotBlank() }?.let { transport.put("session_id_key", it) }
+            extra.optString("sessionIDPlacement").takeIf { it.isNotBlank() }?.let { transport.put("session_id_placement", it) }
+            extra.optString("uplinkDataPlacement").takeIf { it.isNotBlank() }?.let { transport.put("uplink_data_placement", it) }
+            extra.optString("uplinkDataKey").takeIf { it.isNotBlank() }?.let { transport.put("uplink_data_key", it) }
+            extra.optString("sessionIdFormat").takeIf { it.isNotBlank() }?.let { transport.put("session_id_format", it) }
+            if (extra.has("scMaxBufferedPosts")) transport.put("sc_max_buffered_posts", extra.optInt("scMaxBufferedPosts"))
+            extra.optString("scMaxEachPostBytes").takeIf { it.isNotBlank() }?.let { transport.put("sc_max_each_post_bytes", it) }
+            extra.optString("scMinPostsIntervalMs").takeIf { it.isNotBlank() }?.let { transport.put("sc_min_posts_interval_ms", it) }
+            val xmux = extra.optJSONObject("xmux")
+            if (xmux != null) transport.put("xmux", xmux)
+        }
         sb.put("transport", transport)
     }
     val security = stream.optString("security", "")
@@ -126,10 +150,13 @@ private fun convertVless(xray: JSONObject): JSONObject {
     } else if (security == "tls") {
         val tls = stream.optJSONObject("tlsSettings") ?: JSONObject()
         val serverName = tls.optString("serverName").ifBlank { vnext.optString("address") }
-        sb.put("tls", JSONObject()
+        val tlsObj = JSONObject()
             .put("enabled", true)
             .put("server_name", serverName)
-            .put("utls", JSONObject().put("enabled", true).put("fingerprint", tls.optString("fingerprint", "chrome"))))
+            .put("utls", JSONObject().put("enabled", true).put("fingerprint", tls.optString("fingerprint", "chrome")))
+        val alpn = tls.optJSONArray("alpn")
+        if (alpn != null && alpn.length() > 0) tlsObj.put("alpn", alpn)
+        sb.put("tls", tlsObj)
     }
     return sb
 }
