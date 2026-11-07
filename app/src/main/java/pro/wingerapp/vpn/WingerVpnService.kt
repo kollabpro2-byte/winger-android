@@ -92,7 +92,12 @@ class WingerVpnService : VpnService() {
         singServer = server
         server.start()
         VpnLog.add("command server started")
-        server.startOrReloadService(sbConfig, OverrideOptions())
+        try {
+            server.startOrReloadService(sbConfig, OverrideOptions())
+        } catch (e: Throwable) {
+            VpnLog.add("startOrReload ошибка: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
+        }
         if (generation.get() != gen) return
         Store.running(this, true)
         VpnLog.add("ядро запущено")
@@ -107,6 +112,7 @@ class WingerVpnService : VpnService() {
     }
 
     private fun openTun(): Int {
+        VpnLog.add("openTun вызван")
         if (prepare(this) != null) error("нет разрешения VPN")
         val b = Builder().setSession("Winger").setMtu(1500)
         if (Build.VERSION.SDK_INT >= 29) b.setMetered(false)
@@ -148,6 +154,17 @@ class WingerVpnService : VpnService() {
             .setSmallIcon(android.R.drawable.ic_lock_lock).build()
     }
 
+    private fun validPrefix(host: String, prefix: Short): String? {
+        val h = host.substringBefore('%')
+        if (h.isBlank() || prefix !in 0..128) return null
+        return runCatching {
+            val addr = InetAddress.getByName(h)
+            val bits = if (addr is java.net.Inet4Address) 32 else 128
+            if (prefix > bits) return null
+            "$h/$prefix"
+        }.getOrNull()
+    }
+
     private fun collectInterfaces(): List<io.nekohasekai.libbox.NetworkInterface> {
         val cm = getSystemService(ConnectivityManager::class.java)
         val javaIfs = runCatching { JavaNetworkInterface.getNetworkInterfaces().toList() }.getOrNull().orEmpty()
@@ -164,10 +181,11 @@ class WingerVpnService : VpnService() {
             box.mtu = runCatching { jni?.mtu }.getOrNull() ?: 1500
             val addrs = jni?.interfaceAddresses?.mapNotNull { ia ->
                 val host = ia.address.hostAddress ?: return@mapNotNull null
-                "$host/${ia.networkPrefixLength}"
+                validPrefix(host, ia.networkPrefixLength)
             }.orEmpty()
             box.addresses = StrIter(addrs)
-            box.dnsServer = StrIter(lp.dnsServers.mapNotNull { it.hostAddress })
+            box.dnsServer = StrIter(lp.dnsServers.mapNotNull { it.hostAddress?.substringBefore('%') })
+            box.gateway = StrIter(emptyList())
             box.type = when {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Libbox.InterfaceTypeCellular
@@ -179,6 +197,7 @@ class WingerVpnService : VpnService() {
             box.flags = flags
             box.metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             result.add(box)
+            VpnLog.add("iface $name idx=${box.index} addrs=${addrs.size}")
         }
         return result
     }
