@@ -14,7 +14,7 @@ fun toSingBox(xrayJson: String): String {
         .put("type", "tun")
         .put("tag", "tun-in")
         .put("address", JSONArray().put("172.19.0.1/30"))
-        .put("auto_route", true)
+        .put("auto_route", false)
         .put("strict_route", false)))
     val sbOut = JSONArray()
     sbOut.put(JSONObject().put("type", "direct").put("tag", "direct"))
