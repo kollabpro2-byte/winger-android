@@ -8,6 +8,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import pro.wingerapp.vpn.ui.daysUntil
+import pro.wingerapp.vpn.ui.grouped
 
 /**
  * The conversion from a subscription entry to the sing-box config is the place
@@ -236,5 +238,69 @@ class TunnelConfigTest {
     @Test
     fun singleFileSubscriptionIsRejected() {
         assertThrows(IllegalStateException::class.java) { readHapp("""{"outbounds":[]}""") }
+    }
+
+    @Test
+    fun base64SubscriptionIsDecoded() {
+        // Subscriptions are often base64 with line breaks, and this path used to
+        // depend on android.util.Base64, i.e. was untestable off-device.
+        val encoded = java.util.Base64.getMimeEncoder().encodeToString(config(node(remarks = "База")).toByteArray())
+        val sub = readHapp(encoded)
+        assertEquals(1, sub.servers.size)
+        assertEquals("База", sub.servers[0].name)
+        assertEquals("1.2.3.4", sub.servers[0].host)
+    }
+
+    @Test
+    fun bypassEntriesAreNormalisedBeforeTheyReachTheCore() {
+        val rules = routeRules(
+            listOf("domain:bank.ru", "https://sber.ru/pay", " MIR.ru:443 ", "domain", "bank.ru", "https://")
+        )
+        val direct = rules.getJSONObject(0)
+        assertEquals("direct", direct.getString("outbound"))
+        val hosts = direct.getJSONArray("domain_suffix")
+        assertEquals(3, hosts.length())
+        assertEquals("bank.ru", hosts.getString(0))
+        assertEquals("sber.ru", hosts.getString(1))
+        assertEquals("mir.ru", hosts.getString(2))
+        // Everything else still goes through the proxy.
+        assertEquals("proxy", rules.getJSONObject(rules.length() - 1).getString("outbound"))
+    }
+
+    @Test
+    fun serversAreGroupedByTheirName() {
+        val groups = grouped(
+            listOf(
+                ServerNode("Автопилот", "1.1.1.1", 443),
+                ServerNode("Германия", "2.2.2.2", 443),
+                ServerNode("YouTube обход", "3.3.3.3", 443),
+            )
+        )
+        // "YouTube обход" matches two keywords: it must still be listed once.
+        assertEquals(
+            listOf(R.string.group_recommended, R.string.group_countries, R.string.group_youtube),
+            groups.map { it.titleRes }
+        )
+        assertEquals(1, groups.first { it.titleRes == R.string.group_countries }.nodes.size)
+        assertEquals(3, groups.sumOf { it.nodes.size })
+    }
+
+    @Test
+    fun daysUntilCountsCalendarDaysAndRejectsNoise() {
+        val today = java.time.LocalDate.of(2030, 1, 1)
+        assertEquals(10L, daysUntil("2030-01-11", today))
+        assertEquals(10L, daysUntil("2030-01-11T09:30:00Z", today))
+        assertNull(daysUntil("not-a-date", today))
+        assertNull(daysUntil(null, today))
+    }
+
+    @Test
+    fun logSummaryNeverContainsCredentials() {
+        val summary = summarizeSingBox(toSingBox(xrayConfigFor(config(node()), "Msk")))
+        assertFalse(summary.contains("uuid-1"))
+        assertFalse(summary.contains("PUBKEY"))
+        assertFalse(summary.contains("ab12"))
+        assertTrue(summary.contains("vless/proxy"))
+        assertTrue(summary.contains("resolver=-"))
     }
 }

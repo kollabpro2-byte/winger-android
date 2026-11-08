@@ -18,8 +18,11 @@ fun readHapp(body: String): SubConfig {
         text.startsWith("[") -> text
         text.startsWith("{") -> throw IllegalStateException("подписка пришла одним файлом, а не списком серверов")
         else -> {
+            // java.util.Base64 instead of android.util.Base64: the MIME decoder
+            // tolerates the line breaks subscriptions come with, and the parser
+            // stays a plain-JVM function that unit tests can cover.
             val decoded = runCatching {
-                String(android.util.Base64.decode(text, android.util.Base64.DEFAULT))
+                String(java.util.Base64.getMimeDecoder().decode(text), Charsets.UTF_8)
             }.getOrNull()?.trim().orEmpty()
             if (decoded.startsWith("[")) decoded else throw IllegalStateException("не удалось прочитать список серверов")
         }

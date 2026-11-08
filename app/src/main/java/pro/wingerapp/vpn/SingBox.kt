@@ -135,7 +135,7 @@ private fun firstVless(obs: JSONArray): JSONObject? {
  * Bypass entries come from the UI as bare hosts, but older versions stored
  * "domain:bank.ru" and users may paste URLs. Normalise both.
  */
-private fun routeRules(raw: List<String>): JSONArray {
+internal fun routeRules(raw: List<String>): JSONArray {
     val hosts = raw.mapNotNull { line ->
         val host = line.trim().lowercase()
             .removePrefix("domain:")

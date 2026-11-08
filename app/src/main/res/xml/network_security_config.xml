@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Everything the app talks to is HTTPS; the manifest already forbids
+         cleartext, this repeats it for the platform network stack. -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      Certificate pinning for the cabinet API.
+
+      The pins are SPKI SHA-256 hashes of the chain the server really presents
+      (Let's Encrypt): the leaf key, the "YE2" intermediate and ISRG Root X2.
+      A normal renewal keeps at least one of them, while an interceptor would
+      need a private key matching none of them.
+
+      Rotation: ship a release with the new pin *before* the certificate
+      changes. `expiration` makes pinning drop back to plain PKI after that
+      date instead of locking every installed app out forever.
+
+      The subscription host is deliberately not pinned here: it comes from the
+      panel and may live on another domain with its own certificate, so a wrong
+      pin there would leave users without a single server to connect to.
+    -->
+    <domain-config>
+        <domain includeSubdomains="false">my.wingerapp.pro</domain>
+        <pin-set expiration="2027-11-01">
+            <pin digest="SHA-256">sYYmfHBnAneTGcHZWypM9HR6t2z6fnnCr2JxLnVoCCA=</pin>
+            <pin digest="SHA-256">s/tdAOmUzd8syaTuqfgGvFcn6DzA5Cmb+Vby1ST+U3Y=</pin>
+            <pin digest="SHA-256">sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>

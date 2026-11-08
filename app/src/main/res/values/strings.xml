@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Login / registration -->
+    <string name="login_title">Вход в аккаунт</string>
+    <string name="login_label">Логин</string>
+    <string name="login_password">Пароль</string>
+    <string name="login_busy">Входим…</string>
+    <string name="login_action">Войти</string>
+    <string name="login_register_prompt">Нет аккаунта? Зарегистрироваться</string>
+    <string name="login_disable_vpn">Выключить VPN</string>
+    <string name="login_no_network">нет сети</string>
+    <string name="reg_back">← Назад</string>
+    <string name="reg_title">Регистрация</string>
+    <string name="reg_subtitle">Аккаунт создаётся сразу, без браузера</string>
+    <string name="reg_busy">Создаю…</string>
+    <string name="reg_action">Создать аккаунт</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Главная</string>
+    <string name="nav_account">Аккаунт</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Home -->
+    <string name="home_no_subscription">Нужно приобрести подписку</string>
+    <string name="home_no_subscription_hint">Перейдите во вкладку Аккаунт</string>
+    <string name="home_tap_prefix">нажмите на </string>
+    <string name="home_tap_suffix"> для подключения</string>
+    <string name="home_eagle">орёл</string>
+    <string name="home_plan_prefix">Тариф </string>
+    <string name="home_plan_left_prefix"> · осталось </string>
+    <string name="home_devices">Устройства </string>
+    <string name="home_devices_value">%1$d из %2$s</string>
+    <string name="home_traffic">    Трафик </string>
+    <string name="home_loading">Загружаем подписку…</string>
+    <string name="home_ping_none">нет</string>
+    <string name="home_ping_unknown">н/д</string>
+    <string name="home_select_server_first">Сначала выберите сервер</string>
+    <string name="home_subscription_updated">Подписка обновлена</string>
+    <string name="home_subscription_failed">не удалось обновить подписку</string>
+    <string name="home_server_proto">VLESS · %1$d</string>
+
+    <!-- Server groups -->
+    <string name="group_recommended">Рекомендуемые</string>
+    <string name="group_countries">Страны</string>
+    <string name="group_youtube">YouTube</string>
+    <string name="group_bypass">Обходы</string>
+
+    <!-- Settings -->
+    <string name="set_title">НАСТРОЙКИ</string>
+    <string name="set_dns">DNS</string>
+    <string name="set_dns_hint">Запросы уходят через туннель</string>
+    <string name="set_dns_auto">Авто</string>
+    <string name="set_dns_own">Свой</string>
+    <string name="set_connection">СОЕДИНЕНИЕ</string>
+    <string name="set_mux">Mux (не для vision)</string>
+    <string name="set_core">ЯДРО</string>
+    <string name="set_core_log">Подробный лог ядра</string>
+    <string name="set_core_log_hint">Нужен, чтобы разобрать, почему нет соединения</string>
+    <string name="set_bypass">БЕЗ ТУННЕЛЯ</string>
+    <string name="set_bypass_hint">Эти домены идут напрямую, мимо VPN</string>
+    <string name="set_add">добавить</string>
+    <string name="set_remove">убрать</string>
+    <string name="set_log">ЛОГ</string>
+    <string name="set_log_empty">пока пусто</string>
+    <string name="set_refresh">Обновить</string>
+    <string name="set_copy">Скопировать</string>
+    <string name="set_clear">Очистить</string>
+
+    <!-- Account -->
+    <string name="acc_account">АККАУНТ</string>
+    <string name="acc_telegram">TELEGRAM</string>
+    <string name="acc_telegram_hint">Привяжите Telegram и заберите бонус</string>
+    <string name="acc_telegram_bind">Привязать Telegram +3 дня</string>
+    <string name="acc_telegram_linked">привязан</string>
+    <string name="acc_telegram_failed">Telegram не открылся</string>
+    <string name="acc_telegram_bonus">Бонус +3 дня начислен</string>
+    <string name="acc_payment">ОПЛАТА</string>
+    <string name="acc_renewal">ПРОДЛЕНИЕ</string>
+    <string name="acc_days">дни</string>
+    <string name="acc_price">цена</string>
+    <string name="acc_renew">Продлить</string>
+    <string name="acc_pay_method">СПОСОБ ОПЛАТЫ</string>
+    <string name="acc_error">ошибка</string>
+    <string name="acc_opening">Открываем…</string>
+    <string name="acc_go_pay">Перейти к оплате</string>
+    <string name="acc_devices">УСТРОЙСТВА</string>
+    <string name="acc_collapse">свернуть</string>
+    <string name="acc_expand">развернуть</string>
+    <string name="acc_remove">удалить</string>
+    <string name="acc_remove_title">Удалить устройство?</string>
+    <string name="acc_remove_no">Нет</string>
+    <string name="acc_remove_yes">Да</string>
+    <string name="acc_remove_failed">не удалось удалить устройство</string>
+    <string name="acc_session">СЕССИЯ</string>
+    <string name="acc_logout">выйти</string>
+    <string name="acc_support">ПОДДЕРЖКА</string>
+    <string name="acc_support_open">открыть</string>
+    <string name="acc_devices_value">%1$d из %2$d</string>
+
+    <!-- Support chat -->
+    <string name="chat_title">Поддержка</string>
+    <string name="chat_close">Закрыть</string>
+    <string name="chat_hint">Напишите сообщение, и откроется новый тикет.</string>
+    <string name="chat_me">Вы</string>
+    <string name="chat_placeholder">Сообщение</string>
+
+    <!-- Subscription card -->
+    <string name="sub_active">АКТИВНА</string>
+    <string name="sub_inactive">НЕАКТИВНА</string>
+    <string name="sub_traffic">ТРАФИК</string>
+    <string name="sub_left">ОСТАЛОСЬ</string>
+    <string name="sub_loading">Подписка в пути</string>
+    <string name="sub_plan">Тариф</string>
+
+    <!-- Components -->
+    <string name="comp_bird">птица</string>
+    <string name="comp_sbp">СБП</string>
+    <string name="comp_mir">МИР</string>
+    <string name="comp_zero">0 Б</string>
+
+    <!-- Formatting -->
+    <string name="fmt_gb_of">%1$s ГБ из %2$s</string>
+    <string name="fmt_gb">%1$.0f ГБ</string>
+    <string name="fmt_none">—</string>
+
+    <plurals name="days">
+        <item quantity="one">%1$d день</item>
+        <item quantity="few">%1$d дня</item>
+        <item quantity="many">%1$d дней</item>
+        <item quantity="other">%1$d дня</item>
+    </plurals>
+</resources>
