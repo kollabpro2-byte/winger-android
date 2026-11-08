@@ -20,6 +20,7 @@ class TunnelConfigTest {
         flow: String = "xtls-rprx-vision",
         network: String = "tcp",
         security: String = "reality",
+        address: String = "1.2.3.4",
         ws: String = "{}",
         xhttp: String = "{}",
         tls: String = "{}",
@@ -33,7 +34,7 @@ class TunnelConfigTest {
               "settings": {
                 "vnext": [
                   {
-                    "address": "1.2.3.4",
+                    "address": "$address",
                     "port": 443,
                     "users": [{ "id": "uuid-1", "flow": "$flow", "encryption": "none" }]
                   }
@@ -87,8 +88,10 @@ class TunnelConfigTest {
         assertEquals("gvisor", tun.getString("stack"))
         assertFalse(tun.getBoolean("auto_route"))
 
-        val dns = sb.getJSONObject("dns").getJSONArray("servers").getJSONObject(0)
-        assertEquals("proxy", dns.getString("detour"))
+        val dns = sb.getJSONObject("dns").getJSONArray("servers")
+        assertEquals("bootstrap", dns.getJSONObject(0).getString("tag"))
+        assertNull(dns.getJSONObject(0).opt("detour"))
+        assertEquals("proxy", dns.getJSONObject(1).getString("detour"))
 
         val route = rules(sb)
         assertEquals("proxy", route.getJSONObject(route.length() - 1).getString("outbound"))
@@ -140,18 +143,65 @@ class TunnelConfigTest {
     }
 
     @Test
-    fun xhttpExtrasAreForwarded() {
-        val xhttp = """{"path":"/x","mode":"auto","extra":{"uplinkHTTPMethod":"PUT","xPaddingBytes":"100-200","scMaxBufferedPosts":3}}"""
-        val sb = pipe(node(network = "xhttp", xhttp = xhttp))
-        val proxy = proxy(sb)
+    fun xhttpDropsFieldsUnknownToTheCore() {
+        val extra = """
+            {"uplinkHTTPMethod":"PUT","xPaddingBytes":"100-200","xPaddingObfsMode":true,
+             "sessionKey":"_session","session_id_key":"X-Session","sessionIdFormat":"hex",
+             "scMaxBufferedPosts":3,"scMaxEachPostBytes":"1000000","xmux":{"maxConcurrency":"16-32"}}
+        """.trimIndent()
+        val xhttp = """{"path":"/x","mode":"auto","host":"cdn.example.com","extra":$extra}"""
+        val proxy = proxy(pipe(node(network = "xhttp", xhttp = xhttp)))
         val transport = proxy.getJSONObject("transport")
         assertEquals("xhttp", transport.getString("type"))
         assertEquals("/x", transport.getString("path"))
+        assertEquals("auto", transport.getString("mode"))
+        assertEquals("cdn.example.com", transport.getString("host"))
         assertEquals("PUT", transport.getString("uplink_http_method"))
         assertEquals("100-200", transport.getString("x_padding_bytes"))
-        assertEquals(3, transport.getInt("sc_max_buffered_posts"))
-        // vision flow and xhttp are incompatible, the field must be dropped
+        assertTrue(transport.getBoolean("x_padding_obfs_mode"))
+        assertEquals("_session", transport.getString("session_key"))
+        // Not in libbox 1.14.4-lx.33: one such key aborts the whole config
+        // with "unknown field" and the tunnel never starts.
+        assertNull(transport.opt("session_id_key"))
+        assertNull(transport.opt("session_id_format"))
+        assertNull(transport.opt("sc_max_buffered_posts"))
+        assertNull(transport.opt("xmux"))
         assertNull(proxy.opt("flow"))
+    }
+
+    @Test
+    fun minimalTransportKeepsOnlySafeFields() {
+        val xhttp = """{"path":"/x","mode":"auto","extra":{"xPaddingBytes":"100-200","session_id_key":"X"}}"""
+        val proxy = proxy(pipe(node(network = "xhttp", xhttp = xhttp), TunnelOptions(minimalTransport = true)))
+        val transport = proxy.getJSONObject("transport")
+        assertEquals("xhttp", transport.getString("type"))
+        assertEquals("/x", transport.getString("path"))
+        assertEquals("auto", transport.getString("mode"))
+        assertNull(transport.opt("x_padding_bytes"))
+    }
+
+    @Test
+    fun routeDeclaresDomainResolverForProxyEndpoint() {
+        // The tunnel used to come up with no internet: the core could not dial
+        // the proxy by name without a resolver ("missing
+        // route.default_domain_resolver").
+        val route = pipe().getJSONObject("route")
+        assertEquals("bootstrap", route.getString("default_domain_resolver"))
+        assertTrue(route.getBoolean("auto_detect_interface"))
+    }
+
+    @Test
+    fun malformedProxyAddressDoesNotBreakTheConfig() {
+        // A failed lookup must not abort the whole config: the core's bootstrap
+        // resolver still gets a chance at dial time. The name below is rejected
+        // by InetAddress itself, so the test does not depend on the network.
+        val sb = pipe(node(address = "bad..host"))
+        assertEquals("bad..host", proxy(sb).getString("server"))
+    }
+
+    @Test
+    fun ipLiteralIsUsedAsIs() {
+        assertEquals("1.2.3.4", proxy(pipe()).getString("server"))
     }
 
     @Test

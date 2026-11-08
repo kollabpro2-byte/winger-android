@@ -978,12 +978,18 @@ private fun SettingsTab(ctx: Context, onApply: () -> Unit) {
         }
         Text("ЯДРО", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Text("sing-box-lx 1.14.4 (XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))
-        Text(
-            if (BuildConfig.CORE_LOG) "лог ядра включён (debug)" else "лог ядра выключен (release)",
-            color = Muted,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(top = 4.dp)
-        )
+        var verbose by remember { mutableStateOf(BuildConfig.CORE_LOG || Store.coreLog(ctx)) }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Подробный лог ядра", color = Color.White)
+                Text("Нужен, чтобы разобрать, почему нет соединения", color = Muted, fontSize = 11.sp)
+            }
+            Switch(verbose, {
+                verbose = it
+                Store.coreLog(ctx, it)
+                onApply()
+            })
+        }
         Text("БЕЗ ТУННЕЛЯ", color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Text("Эти домены идут напрямую, мимо VPN", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

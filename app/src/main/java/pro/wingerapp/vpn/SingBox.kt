@@ -2,6 +2,11 @@ package pro.wingerapp.vpn
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * Knobs that only the service knows about: DNS choice, the "без туннеля" list,
@@ -13,6 +18,12 @@ data class TunnelOptions(
     val useMux: Boolean = false,
     val mtu: Int = 1500,
     val coreLogFile: String? = null,
+    /**
+     * Drop every optional XHTTP knob. The core rejects the whole config with
+     * "unknown field" on a single unrecognised key, so the service retries with
+     * this flag after a decode error instead of leaving the user without a VPN.
+     */
+    val minimalTransport: Boolean = false,
 )
 
 /**
@@ -34,9 +45,14 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     sb.put("inbounds", JSONArray().put(tunInbound(opts.mtu)))
     sb.put("outbounds", JSONArray()
         .put(JSONObject().put("type", "direct").put("tag", "direct"))
-        .put(convertVless(proxy, opts.useMux)))
+        .put(convertVless(proxy, opts.useMux, opts.minimalTransport)))
     sb.put("route", JSONObject()
         .put("auto_detect_interface", true)
+        // Without a resolver the core cannot dial the proxy by name: the tunnel
+        // comes up and every connection fails with "missing
+        // route.default_domain_resolver". `bootstrap` resolves it outside the
+        // tunnel, which is the only option while the tunnel does not exist yet.
+        .put("default_domain_resolver", "bootstrap")
         .put("rules", routeRules(opts.directDomains)))
     return sb.toString()
 }
@@ -78,19 +94,25 @@ fun summarizeSingBox(sbConfig: String): String = try {
                 "flow=$flow mux=$mux"
         }
     }
-    val dns = o.has("dns") && !o.isNull("dns")
-    val detour = o.optJSONObject("dns")?.optJSONArray("servers")?.optJSONObject(0)
-        ?.optString("detour").orEmpty().ifBlank { "-" }
-    val rules = o.optJSONObject("route")?.optJSONArray("rules")?.length() ?: 0
+    val servers = o.optJSONObject("dns")?.optJSONArray("servers")
+    val serverCount = servers?.length() ?: 0
+    val detour = servers?.optJSONObject(serverCount - 1)?.optString("detour").orEmpty().ifBlank { "-" }
+    val routeObj = o.optJSONObject("route")
+    val resolver = routeObj?.optString("default_domain_resolver").orEmpty().ifBlank { "-" }
+    val rules = routeObj?.optJSONArray("rules")?.length() ?: 0
     "cfg $tunLine in=[${inDesc.joinToString(",")}] out=[${outDesc.joinToString(",")}] " +
-        "$proxyLine dns=$dns dnsDetour=$detour rules=$rules"
+        "$proxyLine dns=$serverCount dnsDetour=$detour resolver=$resolver rules=$rules"
 } catch (e: Throwable) {
     "cfg summary fail: ${e.javaClass.simpleName}: ${e.message}"
 }
 
+/**
+ * The core writes its own log only when the service passed a path: debug builds
+ * always do, release builds do it after the user flips the diagnostics switch.
+ */
 private fun coreLog(path: String?): JSONObject =
-    if (!BuildConfig.CORE_LOG || path.isNullOrBlank()) JSONObject().put("disabled", true)
-    else JSONObject().put("level", "info").put("output", path).put("timestamp", true)
+    if (path.isNullOrBlank()) JSONObject().put("disabled", true)
+    else JSONObject().put("level", "debug").put("output", path).put("timestamp", true)
 
 private fun firstVless(obs: JSONArray): JSONObject? {
     for (i in 0 until obs.length()) {
@@ -129,23 +151,36 @@ private fun routeRules(raw: List<String>): JSONArray {
 }
 
 /**
- * DNS is resolved inside the tunnel: a resolver reached over the physical
- * interface would leak the query and could be poisoned by the ISP.
+ * Two resolvers:
+ *  - `bootstrap` resolves the proxy endpoint itself. It must stay outside the
+ *    tunnel: the tunnel does not exist yet, and sing-box fails with
+ *    "missing route.default_domain_resolver" when the only resolver is behind
+ *    the proxy.
+ *  - `remote` handles user queries inside the tunnel.
  */
 private fun dnsSection(server: String?): JSONObject {
+    val upstream = normalizeDns(server)
+    return JSONObject()
+        .put("servers", JSONArray()
+            .put(JSONObject()
+                .put("type", "udp")
+                .put("tag", "bootstrap")
+                .put("server", "1.1.1.1"))
+            .put(JSONObject()
+                .put("type", "udp")
+                .put("tag", "remote")
+                .put("server", upstream)
+                .put("detour", "proxy")))
+        .put("final", "remote")
+}
+
+private fun normalizeDns(server: String?): String {
     val value = server?.trim().orEmpty().removePrefix("udp://")
-    val upstream = when {
-        value.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) -> value
+    return when {
+        value.matches(IPV4) -> value
         value.contains(':') && !value.contains('/') && !value.contains("://") -> value
         else -> "1.1.1.1"
     }
-    return JSONObject()
-        .put("servers", JSONArray().put(JSONObject()
-            .put("type", "udp")
-            .put("tag", "remote")
-            .put("server", upstream)
-            .put("detour", "proxy")))
-        .put("final", "remote")
 }
 
 /**
@@ -165,7 +200,7 @@ private fun tunInbound(mtu: Int): JSONObject = JSONObject()
     .put("strict_route", false)
     .put("stack", "gvisor")
 
-private fun convertVless(xray: JSONObject, useMux: Boolean): JSONObject {
+private fun convertVless(xray: JSONObject, useMux: Boolean, minimalTransport: Boolean): JSONObject {
     val settings = xray.optJSONObject("settings") ?: JSONObject()
     val vnext = settings.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
     val users = vnext.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
@@ -174,7 +209,7 @@ private fun convertVless(xray: JSONObject, useMux: Boolean): JSONObject {
     val sb = JSONObject()
     sb.put("type", "vless")
     sb.put("tag", "proxy")
-    sb.put("server", vnext.optString("address"))
+    sb.put("server", resolveServer(vnext.optString("address")))
     sb.put("server_port", vnext.optInt("port", 443))
     sb.put("uuid", users.optString("id"))
     val flow = users.optString("flow", "")
@@ -183,13 +218,37 @@ private fun convertVless(xray: JSONObject, useMux: Boolean): JSONObject {
     val flowUsable = flow.isNotBlank() && network in setOf("tcp", "raw", "")
     if (flowUsable) sb.put("flow", flow)
     users.optString("packetEncoding").takeIf { it.isNotBlank() }?.let { sb.put("packet_encoding", it) }
-    transportFor(stream, network)?.let { sb.put("transport", it) }
+    transportFor(stream, network, minimalTransport)?.let { sb.put("transport", it) }
     tlsFor(stream, vnext.optString("address"))?.let { sb.put("tls", it) }
     if (useMux && !flowUsable) {
         sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", "smux"))
     }
     return sb
 }
+
+/**
+ * The core cannot dial the proxy by name on its own (see
+ * route.default_domain_resolver above), so resolve it here and keep the domain
+ * only for TLS/Reality `server_name`. A failed or slow lookup is not fatal: the
+ * name is passed through and the core's bootstrap resolver takes over.
+ */
+private fun resolveServer(host: String): String {
+    val raw = host.trim()
+    if (raw.isBlank()) return raw
+    if (raw.matches(IPV4)) return raw
+    if (raw.contains(':') && !raw.contains("://")) return raw
+    val answer = ArrayBlockingQueue<String>(1)
+    thread(isDaemon = true, name = "proxy-lookup") {
+        val addresses = runCatching { InetAddress.getAllByName(raw).toList() }.getOrNull()
+        val pick = addresses?.filterIsInstance<Inet4Address>()?.firstOrNull() ?: addresses?.firstOrNull()
+        runCatching { answer.offer(pick?.hostAddress ?: raw, LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }
+    }
+    val picked = runCatching { answer.poll(LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }.getOrNull()
+    return picked?.takeIf { it.isNotBlank() } ?: raw
+}
+
+private const val LOOKUP_TIMEOUT_SEC = 3L
+private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 
 private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
     return when (stream.optString("security", "").lowercase()) {
@@ -223,8 +282,8 @@ private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
 }
 
 /** Xray network names → sing-box transports. Anything unknown is left out. */
-private fun transportFor(stream: JSONObject, network: String): JSONObject? = when (network) {
-    "xhttp", "splithttp" -> xhttpTransport(stream)
+private fun transportFor(stream: JSONObject, network: String, minimal: Boolean = false): JSONObject? = when (network) {
+    "xhttp", "splithttp" -> xhttpTransport(stream, minimal)
     "ws" -> {
         val ws = stream.optJSONObject("wsSettings") ?: JSONObject()
         val t = JSONObject().put("type", "ws")
@@ -232,9 +291,11 @@ private fun transportFor(stream: JSONObject, network: String): JSONObject? = whe
         ws.optJSONObject("headers")?.optString("Host")?.takeIf { it.isNotBlank() }?.let { host ->
             t.put("headers", JSONObject().put("Host", host))
         }
-        ws.optInt("maxEarlyData", 0).takeIf { it > 0 }?.let { t.put("max_early_data", it) }
-        ws.optString("earlyDataHeaderName").takeIf { it.isNotBlank() }
-            ?.let { t.put("early_data_header_name", it) }
+        if (!minimal) {
+            ws.optInt("maxEarlyData", 0).takeIf { it > 0 }?.let { t.put("max_early_data", it) }
+            ws.optString("earlyDataHeaderName").takeIf { it.isNotBlank() }
+                ?.let { t.put("early_data_header_name", it) }
+        }
         t
     }
     "grpc" -> {
@@ -261,13 +322,19 @@ private fun transportFor(stream: JSONObject, network: String): JSONObject? = whe
     else -> null
 }
 
-/** sing-box-lx xhttp: all the uplink/padding/seq/session knobs Xray puts in `extra`. */
-private fun xhttpTransport(stream: JSONObject): JSONObject {
+/**
+ * sing-box-lx XHTTP. Only the keys this libbox build actually understands:
+ * the decoder rejects the whole config with "unknown field" on anything else,
+ * and the tunnel then never starts. `session_id_*`, `uplink_data_*`, `sc_*` and
+ * `xmux` are Xray-only and are deliberately dropped.
+ */
+private fun xhttpTransport(stream: JSONObject, minimal: Boolean): JSONObject {
     val xhttp = stream.optJSONObject("xhttpSettings") ?: JSONObject()
     val transport = JSONObject().put("type", "xhttp")
     xhttp.optString("path").takeIf { it.isNotBlank() }?.let { transport.put("path", it) }
     xhttp.optString("mode").takeIf { it.isNotBlank() }?.let { transport.put("mode", it) }
     xhttp.optString("host").takeIf { it.isNotBlank() }?.let { transport.put("host", it) }
+    if (minimal) return transport
     val extra = xhttp.optJSONObject("extra") ?: return transport
     fun str(key: String, target: String) {
         extra.optString(key).takeIf { it.isNotBlank() }?.let { transport.put(target, it) }
@@ -283,14 +350,5 @@ private fun xhttpTransport(stream: JSONObject): JSONObject {
     str("seqKey", "seq_key")
     str("sessionPlacement", "session_placement")
     str("sessionKey", "session_key")
-    str("sessionIDKey", "session_id_key")
-    str("sessionIDPlacement", "session_id_placement")
-    str("uplinkDataPlacement", "uplink_data_placement")
-    str("uplinkDataKey", "uplink_data_key")
-    str("sessionIdFormat", "session_id_format")
-    if (extra.has("scMaxBufferedPosts")) transport.put("sc_max_buffered_posts", extra.optInt("scMaxBufferedPosts"))
-    str("scMaxEachPostBytes", "sc_max_each_post_bytes")
-    str("scMinPostsIntervalMs", "sc_min_posts_interval_ms")
-    extra.optJSONObject("xmux")?.let { transport.put("xmux", it) }
     return transport
 }

@@ -136,4 +136,9 @@ object Store {
     fun mtuLow(ctx: Context) = prefs(ctx)?.getBoolean("mtuLow", false) ?: false
 
     fun mtuLow(ctx: Context, on: Boolean) = write(ctx) { putBoolean("mtuLow", on) }
+
+    /** Verbose sing-box file log, also for release builds (diagnostics on device). */
+    fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
+
+    fun coreLog(ctx: Context, on: Boolean) = write(ctx) { putBoolean("coreLog", on) }
 }

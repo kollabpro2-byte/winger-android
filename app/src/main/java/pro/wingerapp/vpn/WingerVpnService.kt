@@ -165,53 +165,73 @@ class WingerVpnService : VpnService() {
         opts.appVersion = BuildConfig.VERSION_NAME
         opts.debug = false
         val ver = runCatching { Libbox.version() }.getOrElse { "?" }
-        VpnLog.add("libbox $ver, core log=${BuildConfig.CORE_LOG}, debug=false")
+        val coreLog = BuildConfig.CORE_LOG || Store.coreLog(this)
+        VpnLog.add("libbox $ver, core log=$coreLog, debug=false")
         Libbox.setup(opts)
         val mtu = tunnelMtu()
-        val sbConfig = try {
-            toSingBox(
-                config,
-                TunnelOptions(
-                    dnsServer = Store.dnsServer(this),
-                    directDomains = Store.bypass(this),
-                    useMux = Store.useMux(this),
-                    mtu = mtu,
-                    coreLogFile = if (BuildConfig.CORE_LOG) File(filesDir, "singbox.log").absolutePath else null,
-                ),
-            )
-        } catch (e: Throwable) {
-            // Fail closed: never bring up a direct tunnel and call it a VPN.
-            fail(e.message ?: "не удалось собрать конфиг ядра")
-            stopCore()
-            stopSelf()
-            return
-        }
-        VpnLog.add(summarizeSingBox(sbConfig))
-        val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
-        singServer = server
-        server.start()
-        VpnLog.add("command server started")
-        val watchdog = Thread {
-            try {
-                Thread.sleep(12_000)
-                if (generation.get() == gen && !TunnelState.running.value) {
-                    VpnLog.add("WATCHDOG: openTun не достигнут за 12с")
-                    Thread.getAllStackTraces().forEach { (t, st) ->
-                        VpnLog.add("  thread ${t.name} (${t.state}): ${st.take(8).joinToString(" | ") { it.toString().substringAfterLast('.') }}")
-                    }
-                }
-            } catch (_: InterruptedException) {
+        val logFile = if (coreLog) File(filesDir, "singbox.log").absolutePath else null
+
+        // A single unknown JSON field makes the core reject the whole config and
+        // the user is left without a VPN, so retry once without the optional
+        // XHTTP knobs instead of only reporting the decode error.
+        var attempt = 0
+        while (true) {
+            val sbConfig = try {
+                toSingBox(
+                    config,
+                    TunnelOptions(
+                        dnsServer = Store.dnsServer(this),
+                        directDomains = Store.bypass(this),
+                        useMux = Store.useMux(this),
+                        mtu = mtu,
+                        coreLogFile = logFile,
+                        minimalTransport = attempt > 0,
+                    ),
+                )
+            } catch (e: Throwable) {
+                // Fail closed: never bring up a direct tunnel and call it a VPN.
+                fail(e.message ?: "не удалось собрать конфиг ядра")
+                stopCore()
+                stopSelf()
+                return
             }
-        }.apply { isDaemon = true; name = "vpn-watchdog"; start() }
-        try {
-            VpnLog.add("вызов startOrReloadService...")
-            server.startOrReloadService(sbConfig, OverrideOptions())
-            VpnLog.add("startOrReloadService вернулся")
-        } catch (e: Throwable) {
-            VpnLog.add("startOrReload ошибка: ${err(e)}\n${e.stackTraceToString().take(1500)}")
-            throw e
-        } finally {
-            watchdog.interrupt()
+            VpnLog.add(summarizeSingBox(sbConfig))
+            val server = Libbox.newCommandServer(BoxHandler(), BoxPlatform())
+            singServer = server
+            server.start()
+            VpnLog.add("command server started (attempt ${attempt + 1})")
+            val watchdog = Thread {
+                try {
+                    Thread.sleep(12_000)
+                    if (generation.get() == gen && !TunnelState.running.value) {
+                        VpnLog.add("WATCHDOG: openTun не достигнут за 12с")
+                        Thread.getAllStackTraces().forEach { (t, st) ->
+                            VpnLog.add("  thread ${t.name} (${t.state}): ${st.take(8).joinToString(" | ") { it.toString().substringAfterLast('.') }}")
+                        }
+                    }
+                } catch (_: InterruptedException) {
+                }
+            }.apply { isDaemon = true; name = "vpn-watchdog"; start() }
+            try {
+                VpnLog.add("вызов startOrReloadService...")
+                server.startOrReloadService(sbConfig, OverrideOptions())
+                VpnLog.add("startOrReloadService вернулся")
+                watchdog.interrupt()
+                break
+            } catch (e: Throwable) {
+                watchdog.interrupt()
+                VpnLog.add("startOrReload ошибка: ${err(e)}")
+                runCatching { server.closeService() }
+                runCatching { server.close() }
+                singServer = null
+                val message = e.message.orEmpty()
+                if (attempt == 0 && retryableConfigError(message)) {
+                    VpnLog.add("конфиг отвергнут ядром, повтор без XHTTP-настроек")
+                    attempt++
+                    continue
+                }
+                throw e
+            }
         }
         if (generation.get() != gen) return
         Store.lastConfig(this, config)
@@ -220,6 +240,15 @@ class WingerVpnService : VpnService() {
         VpnLog.add("ядро запущено, mtu=$mtu")
         startHeartbeat(gen)
     }
+
+    /**
+     * Only config-shaped failures are worth a second attempt. Anything else
+     * (no tun permission, port in use, out of memory) fails the same way twice.
+     */
+    private fun retryableConfigError(message: String): Boolean =
+        message.contains("unknown field", ignoreCase = true) ||
+            message.contains("decode config", ignoreCase = true) ||
+            message.contains("cannot unmarshal", ignoreCase = true)
 
     private fun tunnelMtu() = if (Store.mtuLow(this)) 1400 else 1500
 
@@ -236,11 +265,12 @@ class WingerVpnService : VpnService() {
                 if (generation.get() != gen) return@Thread
                 val sec = ((SystemClock.elapsedRealtime() - start) / 1000).toInt()
                 val heap = Debug.getNativeHeapAllocatedSize()
+                // /proc/net/dev is unreadable for apps since Android 10 and this
+                // libbox build has no stats API, so traffic is only reported when
+                // it really can be read instead of logging "rx=?" forever.
                 val traffic = runCatching { tunTraffic() }.getOrNull()
-                VpnLog.add(
-                    "alive ${sec}s heap=$heap threads=${Thread.activeCount()} " +
-                        "rx=${traffic?.first ?: "?"} tx=${traffic?.second ?: "?"}"
-                )
+                val counters = traffic?.let { " rx=${it.first} tx=${it.second}" }.orEmpty()
+                VpnLog.add("alive ${sec}s heap=$heap threads=${Thread.activeCount()}$counters")
                 delay = if (sec < 60) 5_000L else 30_000L
             }
         }.apply {
