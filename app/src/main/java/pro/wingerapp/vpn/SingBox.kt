@@ -2,7 +2,6 @@ package pro.wingerapp.vpn
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.Inet4Address
 import java.net.InetAddress
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -39,23 +38,33 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
     val proxy = firstVless(outbounds)
         ?: error("в подписке нет VLESS-сервера — туннель не поднят")
+    val proxyOutbound = convertVless(proxy, opts.useMux, opts.minimalTransport)
     val sb = JSONObject()
     sb.put("log", coreLog(opts.coreLogFile))
     sb.put("dns", dnsSection(opts.dnsServer))
     sb.put("inbounds", JSONArray().put(tunInbound(opts.mtu)))
     sb.put("outbounds", JSONArray()
         .put(JSONObject().put("type", "direct").put("tag", "direct"))
-        .put(convertVless(proxy, opts.useMux, opts.minimalTransport)))
-    sb.put("route", JSONObject()
-        .put("auto_detect_interface", true)
-        // Without a resolver the core cannot dial the proxy by name: the tunnel
-        // comes up and every connection fails with "missing
-        // route.default_domain_resolver". `bootstrap` resolves it outside the
-        // tunnel, which is the only option while the tunnel does not exist yet.
-        .put("default_domain_resolver", "bootstrap")
-        .put("rules", routeRules(opts.directDomains)))
+        .put(proxyOutbound))
+    sb.put("route", routeSection(opts.directDomains, proxyOutbound.optString("server")))
     return sb.toString()
 }
+
+/**
+ * A dial by name needs a resolver, otherwise every connection fails with
+ * "missing route.default_domain_resolver" while the tun looks healthy. It is
+ * only emitted when the proxy endpoint is still a name: an IP literal must not
+ * carry extra fields a future core could reject.
+ */
+private fun routeSection(directDomains: List<String>, proxyServer: String): JSONObject {
+    val route = JSONObject()
+        .put("auto_detect_interface", true)
+        .put("rules", routeRules(directDomains))
+    if (!isIpLiteral(proxyServer)) route.put("default_domain_resolver", "bootstrap")
+    return route
+}
+
+private fun isIpLiteral(value: String): Boolean = value.matches(IPV4) || value.contains(':')
 
 /** Short config summary for the log. Omits uuid, keys, short id and passwords. */
 fun summarizeSingBox(sbConfig: String): String = try {
@@ -240,11 +249,37 @@ private fun resolveServer(host: String): String {
     val answer = ArrayBlockingQueue<String>(1)
     thread(isDaemon = true, name = "proxy-lookup") {
         val addresses = runCatching { InetAddress.getAllByName(raw).toList() }.getOrNull()
-        val pick = addresses?.filterIsInstance<Inet4Address>()?.firstOrNull() ?: addresses?.firstOrNull()
-        runCatching { answer.offer(pick?.hostAddress ?: raw, LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }
+        val usable = addresses?.mapNotNull { it.hostAddress }?.filter { plausibleAddress(it) }.orEmpty()
+        val pick = usable.firstOrNull { it.matches(IPV4) } ?: usable.firstOrNull()
+        // Nothing plausible (hijacked or blocked DNS) -> hand the name over to
+        // the core and let route.default_domain_resolver deal with it.
+        runCatching { answer.offer(pick ?: raw, LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }
     }
     val picked = runCatching { answer.poll(LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }.getOrNull()
     return picked?.takeIf { it.isNotBlank() } ?: raw
+}
+
+/**
+ * Bogus answers from a DNS that hijacks everything: 0.0.0.0/8, loopback,
+ * 224.0.0.0/3 (multicast + reserved 240/4) and the 198.18/15 test range. Such an
+ * IP would make the tunnel dial nothing at all, which looks exactly like "VPN is
+ * on, internet is gone".
+ */
+internal fun plausibleAddress(value: String): Boolean {
+    if (value.contains(':')) {
+        val v6 = value.lowercase()
+        return !(v6 == "::" || v6 == "::1" || v6.startsWith("fe80"))
+    }
+    val parts = value.split('.').map { it.toIntOrNull() ?: return false }
+    if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+    val a = parts[0]
+    val b = parts[1]
+    return when {
+        a == 0 || a == 127 || a >= 224 -> false
+        a == 169 && b == 254 -> false
+        a == 198 && (b == 18 || b == 19) -> false
+        else -> true
+    }
 }
 
 private const val LOOKUP_TIMEOUT_SEC = 3L

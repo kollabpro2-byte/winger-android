@@ -185,9 +185,15 @@ class TunnelConfigTest {
         // The tunnel used to come up with no internet: the core could not dial
         // the proxy by name without a resolver ("missing
         // route.default_domain_resolver").
-        val route = pipe().getJSONObject("route")
+        val route = pipe(node(address = "bad..host")).getJSONObject("route")
         assertEquals("bootstrap", route.getString("default_domain_resolver"))
         assertTrue(route.getBoolean("auto_detect_interface"))
+    }
+
+    @Test
+    fun ipEndpointNeedsNoResolver() {
+        val route = pipe().getJSONObject("route")
+        assertNull(route.opt("default_domain_resolver"))
     }
 
     @Test
@@ -202,6 +208,20 @@ class TunnelConfigTest {
     @Test
     fun ipLiteralIsUsedAsIs() {
         assertEquals("1.2.3.4", proxy(pipe()).getString("server"))
+    }
+
+    @Test
+    fun hijackedDnsAnswersAreNotUsedAsProxyAddress() {
+        // Some ISPs answer every name with 0.0.0.0 / 240.x or a loopback, which
+        // makes the tunnel dial nothing at all.
+        assertFalse(plausibleAddress("240.0.1.97"))
+        assertFalse(plausibleAddress("0.0.0.0"))
+        assertFalse(plausibleAddress("127.0.0.1"))
+        assertFalse(plausibleAddress("198.18.0.1"))
+        assertFalse(plausibleAddress("169.254.1.1"))
+        assertFalse(plausibleAddress("fe80::1"))
+        assertTrue(plausibleAddress("92.242.30.5"))
+        assertTrue(plausibleAddress("2a00:1450:4010:c02::64"))
     }
 
     @Test
