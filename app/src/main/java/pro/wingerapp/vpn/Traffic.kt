@@ -1,21 +1,22 @@
 package pro.wingerapp.vpn
 
-import java.io.File
+import android.net.TrafficStats
+import android.os.Process
 
+/**
+ * Байты туннеля для строки «↑ / ↓».
+ *
+ * `/proc/net/dev` приложениям недоступен с Android 10, поэтому раньше счётчики
+ * всегда были нулями. Считаем по своему UID: ядро sing-box работает в нашем
+ * процессе, значит его соединения с сервером — это и есть трафик туннеля.
+ * `first` = получено (rx), `second` = отдано (tx), как и раньше.
+ */
 fun tunTraffic(): Pair<Long, Long>? {
-    val text = runCatching { File("/proc/net/dev").readText() }.getOrNull() ?: return null
-    var best: Pair<Long, Long>? = null
-    for (line in text.lineSequence()) {
-        val trimmed = line.trim()
-        val name = trimmed.substringBefore(":").trim()
-        if (!name.startsWith("tun")) continue
-        val parts = trimmed.substringAfter(":").trim().split(Regex("\\s+"))
-        if (parts.size < 9) continue
-        val rx = parts[0].toLongOrNull() ?: continue
-        val tx = parts[8].toLongOrNull() ?: continue
-        if (best == null || rx + tx > best.first + best.second) best = rx to tx
-    }
-    return best
+    val uid = Process.myUid()
+    val rx = TrafficStats.getUidRxBytes(uid)
+    val tx = TrafficStats.getUidTxBytes(uid)
+    if (rx < 0 || tx < 0) return null
+    return rx to tx
 }
 
 fun fmtBytes(n: Long): String {

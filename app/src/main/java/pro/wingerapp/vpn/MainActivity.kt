@@ -43,7 +43,17 @@ class MainActivity : ComponentActivity() {
         Store.running(this, false)
         Store.clearLastConfig(this)
         TunnelState.off()
-        runCatching { startService(Intent(this, WingerVpnService::class.java).setAction(WingerVpnService.ACTION_STOP)) }
+        // На HyperOS интент ACTION_STOP иногда не доходит (сервис уже не тот,
+        // что был, или система держит его сама), и тогда значок VPN остаётся
+        // висеть до полного закрытия приложения. Поэтому останавливаем двумя
+        // путями: сначала просим сервис остановиться штатно, затем гарантированно
+        // гасим его через stopService — это вызывает onDestroy, а тот закрывает ядро.
+        val stop = Intent(this, WingerVpnService::class.java).setAction(WingerVpnService.ACTION_STOP)
+        runCatching { startService(stop) }
+            .onFailure { VpnLog.add("disconnect: startService(STOP) не сработал: ${it.message}") }
+        runCatching { stopService(Intent(this, WingerVpnService::class.java)) }
+            .onFailure { VpnLog.add("disconnect: stopService не сработал: ${it.message}") }
+        VpnLog.add("disconnect: остановка запрошена")
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

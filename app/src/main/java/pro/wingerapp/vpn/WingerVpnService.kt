@@ -43,6 +43,12 @@ class WingerVpnService : VpnService() {
     private var ifaceListener: InterfaceUpdateListener? = null
     private val rate = LogRate()
 
+    /** Файл лога ядра текущей сессии: его подрезает heartbeat, чтобы он не рос. */
+    private var coreLogFile: File? = null
+
+    /** Когда лог ядра чистился в прошлый раз (раз в час). */
+    private var lastCoreRotate = 0L
+
     override fun onCreate() {
         super.onCreate()
         VpnLog.init(this)
@@ -92,8 +98,15 @@ class WingerVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        // Страховка: если сервис гасят снаружи (stopService, система, HyperOS),
+        // состояние обязано стать «выключено», иначе кнопка начнёт включать
+        // вместо выключения, а значок VPN останется на экране.
+        generation.incrementAndGet()
         stopCore()
+        Store.running(this, false)
+        TunnelState.off()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        VpnLog.add("сервис уничтожен")
         super.onDestroy()
     }
 
@@ -170,11 +183,17 @@ class WingerVpnService : VpnService() {
         Libbox.setup(opts)
         val mtu = tunnelMtu()
         val logFile = if (coreLog) File(filesDir, "singbox.log").absolutePath else null
+        coreLogFile = logFile?.let { File(it) }
 
         // A single unknown JSON field makes the core reject the whole config and
         // the user is left without a VPN, so retry once without the optional
         // XHTTP knobs instead of only reporting the decode error.
         var attempt = 0
+        // Поля, которые ядро уже отказалось принимать: каждое следующее
+        // повторение убирает ровно то поле, на котором упал разбор, и
+        // сохраняет остальные настройки XHTTP (иначе теряется фикс 413).
+        val dropped = mutableSetOf<String>()
+        var useMinimal = false
         while (true) {
             val sbConfig = try {
                 toSingBox(
@@ -185,7 +204,9 @@ class WingerVpnService : VpnService() {
                         useMux = Store.useMux(this),
                         mtu = mtu,
                         coreLogFile = logFile,
-                        minimalTransport = attempt > 0,
+                        minimalTransport = useMinimal,
+                        dropXhttpFields = dropped,
+                        ipv6Proxy = Store.ipv6Proxy(this),
                     ),
                 )
             } catch (e: Throwable) {
@@ -225,10 +246,21 @@ class WingerVpnService : VpnService() {
                 runCatching { server.close() }
                 singServer = null
                 val message = e.message.orEmpty()
-                if (attempt == 0 && retryableConfigError(message)) {
-                    VpnLog.add("конфиг отвергнут ядром, повтор без XHTTP-настроек")
-                    attempt++
-                    continue
+                if (retryableConfigError(message) && attempt < 5) {
+                    // Имя поля из текста ошибки: "outbounds[1].transport.<field>".
+                    val badField = Regex("""transport\.([A-Za-z0-9_]+)""")
+                        .find(message)?.groupValues?.get(1)
+                    if (badField != null && dropped.add(badField)) {
+                        VpnLog.add("ядро отвергло поле $badField — повтор без него")
+                        attempt++
+                        continue
+                    }
+                    if (!useMinimal) {
+                        VpnLog.add("конфиг отвергнут ядром, повтор без XHTTP-настроек")
+                        useMinimal = true
+                        attempt++
+                        continue
+                    }
                 }
                 throw e
             }
@@ -271,6 +303,16 @@ class WingerVpnService : VpnService() {
                 val traffic = runCatching { tunTraffic() }.getOrNull()
                 val counters = traffic?.let { " rx=${it.first} tx=${it.second}" }.orEmpty()
                 VpnLog.add("alive ${sec}s heap=$heap threads=${Thread.activeCount()}$counters")
+                // Логи не должны занимать память устройства: приложение чистится
+                // раз в час, лог ядра — тоже раз в час и вдобавок при 1.5 МБ.
+                VpnLog.rotateIfDue()
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastCoreRotate >= 60L * 60L * 1000L) {
+                    lastCoreRotate = nowMs
+                    VpnLog.pruneCoreLog(coreLogFile, maxBytes = 0L)
+                } else {
+                    VpnLog.pruneCoreLog(coreLogFile)
+                }
                 delay = if (sec < 60) 5_000L else 30_000L
             }
         }.apply {

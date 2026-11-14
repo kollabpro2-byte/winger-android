@@ -50,14 +50,26 @@ object Api {
         if (::app.isInitialized) Store.logout(app)
     }
 
+    /**
+     * SHA-256 пароля. Оставлен ТОЛЬКО для совместимости с текущим BFF кабинета,
+     * который ждёт поле `passwordHash`: сам по себе он пароль не защищает
+     * (быстрый хеш без соли, и перехваченный хеш = готовый пароль).
+     * Как только BFF начнёт принимать `password`, это поле можно удалить.
+     */
     fun sha256(text: String): String {
         val d = MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
         return d.joinToString("") { "%02x".format(it) }
     }
 
     fun login(username: String, password: String): String? {
+        // Пароль уходит по TLS (с пиннингом сертификата) в поле `password` —
+        // так его хеширует сервер (в панели это scrypt с солью). `passwordHash`
+        // отправляется рядом лишь потому, что текущий BFF ещё читает только его;
+        // после его обновления поле уйдёт без потери совместимости со старыми
+        // сборками приложения.
         val body = JSONObject()
             .put("username", username.trim())
+            .put("password", password)
             .put("passwordHash", sha256(password))
         val (code, text) = post("$BASE/auth/login", body.toString())
         if (code != 200) {
@@ -72,7 +84,9 @@ object Api {
         val name = username.trim()
         if (!name.matches(Regex("^[a-zA-Z0-9_-]{3,32}$"))) return "Логин: 3–32 символа, латиница, цифры, _ и -"
         if (password.length < 8 || password.length > 128) return "Пароль от 8 до 128 символов"
-        val body = JSONObject().put("username", name).put("passwordHash", sha256(password))
+        val body = JSONObject().put("username", name)
+            .put("password", password)
+            .put("passwordHash", sha256(password))
             .put("source", "app").put("hwid", hwid)
         val docs = legalKeys()
         if (docs.length() > 0) body.put("acceptedLegalDocuments", docs)
@@ -439,15 +453,21 @@ object Api {
         }.getOrDefault(JSONArray())
         return (0 until arr.length()).map { i ->
             val d = arr.getJSONObject(i)
-            val model = d.optString("deviceModel").ifBlank { d.optString("model") }
-            val os = d.optString("osVersion").ifBlank { d.optString("os") }
-            val platform = d.optString("platform")
-            val ua = d.optString("userAgent")
+            fun text(key: String): String {
+                val v = d.optString(key).trim()
+                // org.json hands back the literal "null" for a JSON null, which is
+                // how a device ends up titled "null · null null" on screen.
+                return if (v.isEmpty() || v == "null" || v == "undefined") "" else v
+            }
+            val model = text("deviceModel").ifBlank { text("model") }
+            val os = text("osVersion").ifBlank { text("os") }
+            val platform = text("platform")
+            val ua = text("userAgent")
             val system = listOf(platform, os).filter { it.isNotBlank() }.joinToString(" ")
             val title = listOf(model, system).filter { it.isNotBlank() }.joinToString(" · ")
                 .ifBlank { ua.ifBlank { "Устройство" } }
-            val seen = d.optString("lastSeenAt").replace("T", " ").take(16)
-            HwDevice(d.optString("hwid"), title, seen)
+            val seen = text("lastSeenAt").replace("T", " ").take(16)
+            HwDevice(text("hwid"), title, seen)
         }
     }
 

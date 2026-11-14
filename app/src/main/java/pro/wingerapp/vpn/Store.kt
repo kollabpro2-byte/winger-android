@@ -134,8 +134,17 @@ object Store {
     fun useMux(ctx: Context, on: Boolean) = write(ctx) { putBoolean("useMux", on) }
 
     fun mtuLow(ctx: Context) = prefs(ctx)?.getBoolean("mtuLow", false) ?: false
-
     fun mtuLow(ctx: Context, on: Boolean) = write(ctx) { putBoolean("mtuLow", on) }
+
+    /**
+     * Только IPv4 для адреса прокси. По умолчанию ВЫКЛЮЧЕНО, то есть IPv6 не
+     * используется: адрес сервера берётся по A-записи, а если её нет — ядру
+     * отдаётся имя, и оно резолвится само. IPv6-адреса в подписке — самая частая
+     * причина «ядро запущено, а трафика нет»: dial по v6 висит до таймаута.
+     */
+    fun ipv6Proxy(ctx: Context) = prefs(ctx)?.getBoolean("ipv6Proxy", false) ?: false
+
+    fun ipv6Proxy(ctx: Context, on: Boolean) = write(ctx) { putBoolean("ipv6Proxy", on) }
 
     /** Verbose sing-box file log, also for release builds (diagnostics on device). */
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
