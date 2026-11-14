@@ -145,20 +145,33 @@ class TunnelConfigTest {
     }
 
     @Test
-    fun xhttpDropsFieldsUnknownToTheCore() {
+    fun xhttpKeepsTheUploadContractAndDropsOnlyUnknownFields() {
         val extra = """
-            {"uplinkHTTPMethod":"PUT","xPaddingBytes":"100-200","xPaddingObfsMode":true,
+            {"uplinkHTTPMethod":"GET","uplinkDataPlacement":"header","uplinkDataKey":"X-Am-Sync",
+             "xPaddingBytes":"100-200","xPaddingObfsMode":true,
              "sessionKey":"_session","session_id_key":"X-Session","sessionIdFormat":"hex",
-             "scMaxBufferedPosts":3,"scMaxEachPostBytes":"1000000","xmux":{"maxConcurrency":"16-32"}}
+             "scMaxBufferedPosts":3,"scMaxEachPostBytes":"1000000","scMinPostsIntervalMs":"15-30",
+             "xmux":{"maxConcurrency":"16-32"}}
         """.trimIndent()
-        val xhttp = """{"path":"/x","mode":"auto","host":"cdn.example.com","extra":$extra}"""
+        val xhttp = """{"path":"/x","mode":"packet-up","host":"cdn.example.com","extra":$extra}"""
         val proxy = proxy(pipe(node(network = "xhttp", xhttp = xhttp)))
         val transport = proxy.getJSONObject("transport")
         assertEquals("xhttp", transport.getString("type"))
         assertEquals("/x", transport.getString("path"))
-        assertEquals("auto", transport.getString("mode"))
+        assertEquals("packet-up", transport.getString("mode"))
         assertEquals("cdn.example.com", transport.getString("host"))
-        assertEquals("PUT", transport.getString("uplink_http_method"))
+        assertEquals("GET", transport.getString("uplink_http_method"))
+        // The 413 fix: without this the payload goes into request BODIES and the
+        // nginx in front of two LTE nodes answers "413 Request Entity Too Large"
+        // to every upload. The field exists in libbox 1.14.4-lx.33.
+        assertEquals("header", transport.getString("uplink_data_placement"))
+        assertEquals("X-Am-Sync", transport.getString("uplink_data_key"))
+        assertEquals("1000000", transport.getString("sc_max_each_post_bytes"))
+        // int64 in the core: must go as a NUMBER, a string aborts the config.
+        assertEquals(3, transport.getInt("sc_max_buffered_posts"))
+        // Left out on purpose — its Go type is not pinned, and one wrong type
+        // costs every extra field on the fallback pass.
+        assertNull(transport.opt("sc_min_posts_interval_ms"))
         assertEquals("100-200", transport.getString("x_padding_bytes"))
         assertTrue(transport.getBoolean("x_padding_obfs_mode"))
         assertEquals("_session", transport.getString("session_key"))
@@ -166,7 +179,6 @@ class TunnelConfigTest {
         // with "unknown field" and the tunnel never starts.
         assertNull(transport.opt("session_id_key"))
         assertNull(transport.opt("session_id_format"))
-        assertNull(transport.opt("sc_max_buffered_posts"))
         assertNull(transport.opt("xmux"))
         assertNull(proxy.opt("flow"))
     }
