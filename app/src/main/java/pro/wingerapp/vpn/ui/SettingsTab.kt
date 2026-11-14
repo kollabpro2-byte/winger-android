@@ -54,6 +54,7 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
     var site by remember { mutableStateOf("") }
     var mux by remember { mutableStateOf(Store.useMux(ctx)) }
     var mtu by remember { mutableStateOf(Store.mtuLow(ctx)) }
+    var v6 by remember { mutableStateOf(Store.ipv6Proxy(ctx)) }
     var logOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
         Text(s[R.string.set_title], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
@@ -77,6 +78,13 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
         Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("MTU 1400", color = Color.White, modifier = Modifier.weight(1f))
             Switch(mtu, { mtu = it; Store.mtuLow(ctx, it); onApply() })
+        }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(s[R.string.set_ipv6], color = Color.White)
+                Text(s[R.string.set_ipv6_hint], color = Muted, fontSize = 11.sp)
+            }
+            Switch(v6, { v6 = it; Store.ipv6Proxy(ctx, it); onApply() })
         }
         Text(s[R.string.set_core], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Text("sing-box-lx 1.14.4 (XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))

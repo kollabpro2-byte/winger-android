@@ -26,6 +26,14 @@
     <string name="home_tap_prefix">нажмите на </string>
     <string name="home_tap_suffix"> для подключения</string>
     <string name="home_eagle">орёл</string>
+    <string name="home_orb_on">ВКЛ</string>
+    <string name="home_orb_off">ВЫКЛ</string>
+    <string name="home_location">Текущее местоположение</string>
+    <string name="home_select_server">выберите сервер</string>
+    <string name="home_ping_ms">%1$d мс</string>
+    <string name="home_days_left">осталось</string>
+    <string name="home_devices_label">устройства</string>
+    <string name="home_traffic_label">трафик</string>
     <string name="home_plan_prefix">Тариф </string>
     <string name="home_plan_left_prefix"> · осталось </string>
     <string name="home_devices">Устройства </string>
@@ -53,6 +61,8 @@
     <string name="set_dns_own">Свой</string>
     <string name="set_connection">СОЕДИНЕНИЕ</string>
     <string name="set_mux">Mux (не для vision)</string>
+    <string name="set_ipv6">IPv6 для адреса прокси</string>
+    <string name="set_ipv6_hint">Выключено: адрес сервера берётся только по A-записи (IPv4)</string>
     <string name="set_core">ЯДРО</string>
     <string name="set_core_log">Подробный лог ядра</string>
     <string name="set_core_log_hint">Нужен, чтобы разобрать, почему нет соединения</string>
@@ -68,6 +78,14 @@
 
     <!-- Account -->
     <string name="acc_account">АККАУНТ</string>
+    <string name="acc_devices_this">ЭТОТ ТЕЛЕФОН</string>
+    <string name="acc_devices_other">ДРУГИЕ УСТРОЙСТВА · %1$d</string>
+    <string name="acc_device_active">активно</string>
+    <string name="acc_price_sign">₽</string>
+    <string name="acc_logout_confirm">Выйти из аккаунта?</string>
+    <string name="acc_logout_hint">VPN продолжит работать, пока вы его не отключите. Чтобы вернуться, понадобится логин и пароль.</string>
+    <string name="acc_logout_yes">Да, выйти</string>
+    <string name="pay_autopay_tag">подписка</string>
     <string name="acc_telegram">TELEGRAM</string>
     <string name="acc_telegram_hint">Привяжите Telegram и заберите бонус</string>
     <string name="acc_telegram_bind">Привязать Telegram +3 дня</string>
@@ -120,6 +138,8 @@
 
     <!-- Formatting -->
     <string name="fmt_gb_of">%1$s ГБ из %2$s</string>
+    <string name="fmt_gb_used">%1$s ГБ</string>
+    <string name="fmt_gb_unit">ГБ</string>
     <string name="fmt_gb">%1$.0f ГБ</string>
     <string name="fmt_none">—</string>
 

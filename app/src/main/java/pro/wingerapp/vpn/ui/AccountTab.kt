@@ -45,7 +45,7 @@ import pro.wingerapp.vpn.*
 import pro.wingerapp.vpn.net.*
 
 @Composable
-internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Unit) {
+internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupport: () -> Unit) {
     val s = rememberStrings()
     var cab by remember { mutableStateOf<pro.wingerapp.vpn.net.Cabinet?>(null) }
     var note by remember { mutableStateOf("") }
@@ -56,6 +56,7 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
     var confirm by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf("") }
     var pickedWay by remember { mutableIntStateOf(0) }
+    var confirmLogout by remember { mutableStateOf(false) }
     var thread by remember { mutableStateOf<pro.wingerapp.vpn.net.SupportThread?>(null) }
     var draft by remember { mutableStateOf("") }
     var files by remember { mutableStateOf(listOf<pro.wingerapp.vpn.net.Attached>()) }
@@ -105,14 +106,14 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
         } else {
         Section {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(s[R.string.acc_account], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                Text(s[R.string.acc_account], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                 Text(c.login, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
         if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
             if (c.telegram == null) {
                 Section {
-                    Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(s[R.string.acc_telegram_hint], color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable { bindTelegram() }.padding(13.dp), contentAlignment = Alignment.Center) {
                         Text(s[R.string.acc_telegram_bind], color = Color.White, fontWeight = FontWeight.SemiBold)
@@ -121,8 +122,8 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
             } else {
                 Section {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
-                        Text(c.telegram ?: s[R.string.acc_telegram_linked], color = Purple, fontSize = 16.sp, fontWeight = FontWeight.Normal)
+                        Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                        Text(c.telegram ?: s[R.string.acc_telegram_linked], color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Normal)
                     }
                 }
             }
@@ -130,22 +131,31 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
             if (c.offers.isNotEmpty()) {
                 val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
                 Section {
-                    Text(if (c.subscriptionId.isBlank()) s[R.string.acc_payment] else s[R.string.acc_renewal], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(if (c.subscriptionId.isBlank()) s[R.string.acc_payment] else s[R.string.acc_renewal], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    // Дни и цены живут в двух Row с одинаковыми weight(1f) и одинаковым
+                    // числом ячеек — поэтому колонки стоят строго друг над другом. При
+                    // 5+ вариантах шрифт уменьшается, иначе «1825» и «1 499» не влезают.
+                    val cellFont = when {
+                        c.offers.size <= 4 -> 14.sp
+                        c.offers.size == 5 -> 12.sp
+                        c.offers.size == 6 -> 10.5.sp
+                        else -> 9.sp
+                    }
                     Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_days], color = Color(0xFF7C8A9B), fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                        Text(s[R.string.acc_days], color = Color(0xFF7C8A9B), fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
                         c.offers.forEach { item ->
                             val on = item.days == picked
-                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.22f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple.copy(.6f) else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                Text("${item.days}", color = Color.White, fontSize = 14.sp)
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                Text("${item.days}", color = Color.White, fontSize = cellFont, maxLines = 1)
                             }
                         }
                     }
                     Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_price], color = Color(0xFF7C8A9B), fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                        Text(s[R.string.acc_price_sign], color = Color(0xFFA6B4C6), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
                         c.offers.forEach { item ->
                             val on = item.days == picked
-                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.22f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple.copy(.6f) else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                Text("${item.price} ₽", color = Color.White, fontSize = 12.sp)
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                Text(item.price, color = Color.White, fontSize = cellFont, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -158,27 +168,41 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
                             }
                         }.padding(13.dp), contentAlignment = Alignment.Center) { Text(s[R.string.acc_renew], color = Color.White, fontWeight = FontWeight.SemiBold) }
                     } else {
-                        Text(s[R.string.acc_pay_method], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 14.dp))
+                        Text(s[R.string.acc_pay_method], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
                         ways.forEachIndexed { index, way ->
                             val amount = offer.amount(way.gateway)
                             val selected = index == pickedWay
                             Row(
-                                Modifier.fillMaxWidth().padding(top = 10.dp)
-                                    .clip(RoundedCornerShape(18.dp))
+                                Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 52.dp)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .background(if (selected) Purple.copy(.14f) else Color(0xFF0A1424))
-                                    .border(1.dp, if (selected) Purple else Purple.copy(.28f), RoundedCornerShape(18.dp))
+                                    .border(1.dp, if (selected) Purple else Purple.copy(.28f), RoundedCornerShape(16.dp))
                                     .clickable { pickedWay = index }
-                                    .padding(horizontal = 14.dp, vertical = 16.dp),
+                                    .padding(horizontal = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 PayMarks(way.gateway)
-                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                    Text(way.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Normal)
-                                    val sub = listOf("$amount ₽", way.hint).filter { it.isNotBlank() }.joinToString(" · ")
-                                    if (sub.isNotBlank()) Text(sub, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                                Row(
+                                    Modifier.weight(1f).padding(start = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        way.title, color = Color.White, fontSize = 14.sp,
+                                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (way.autopay) Text(
+                                        s[R.string.pay_autopay_tag],
+                                        color = Color(0xFFC4B5FD), fontSize = 9.5.sp,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                            .clip(RoundedCornerShape(20.dp)).background(Purple.copy(.18f))
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                        maxLines = 1
+                                    )
                                 }
+                                Text("$amount ₽", color = Color(0xFFA6B4C6), fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
                                 Box(
-                                    Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) Purple else Color.White.copy(.28f), CircleShape).background(if (selected) Purple else Color.Transparent)
+                                    Modifier.padding(start = 10.dp).size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) Purple else Color.White.copy(.28f), CircleShape).background(if (selected) Purple else Color.Transparent)
                                 )
                             }
                         }
@@ -204,44 +228,29 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
             Section {
                 var devicesOpen by remember { mutableStateOf(true) }
                 Row(Modifier.fillMaxWidth().clickable { devicesOpen = !devicesOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_devices], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(s[R.string.acc_devices], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(if (devicesOpen) s[R.string.acc_collapse] else s[R.string.acc_expand], color = Cyan, fontSize = 12.sp)
                 }
                 if (devicesOpen) {
-                    c.devices.forEach { d ->
-                        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(d.title, color = Color.White, fontSize = 14.sp)
-                                Text(d.seen, color = Muted, fontSize = 12.sp)
-                            }
-                            Text(s[R.string.acc_remove], color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.clickable { confirm = d.hwid }.padding(8.dp))
+                    // Разделение по секциям: сначала этот телефон, потом остальные —
+                    // иначе список из пяти устройств не даёт понять, где ты сам.
+                    val mine = c.devices.filter { it.hwid == hwid }
+                    val others = c.devices.filter { it.hwid != hwid }
+                    if (mine.isNotEmpty()) {
+                        DeviceGroup(s[R.string.acc_devices_this], accent = Color(0xFF3DFF7A)) {
+                            mine.forEach { d -> DeviceRow(d, s[R.string.acc_device_active], s[R.string.acc_remove]) { confirm = d.hwid } }
                         }
                     }
-                }
-                if (confirm != null) {
-                    val target = c.devices.find { it.hwid == confirm }
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(.6f)).clickable { confirm = null }, contentAlignment = Alignment.Center) {
-                        Column(Modifier.padding(24.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(s[R.string.acc_remove_title], color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                            Text(target?.title ?: "", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-                            Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text(s[R.string.acc_remove_no], color = Color.White, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF1A2436)).clickable { confirm = null }.padding(horizontal = 20.dp, vertical = 10.dp))
-                                Text(s[R.string.acc_remove_yes], color = Color.White, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFFDC2626)).clickable {
-                                    val hwid = confirm
-                                    confirm = null
-                                    if (hwid != null) scope.launch {
-                                        val ok = withContext(Dispatchers.IO) { Api.removeDevice(hwid) }
-                                        if (ok) load() else note = s[R.string.acc_remove_failed]
-                                    }
-                                }.padding(horizontal = 20.dp, vertical = 10.dp))
-                            }
+                    if (others.isNotEmpty()) {
+                        DeviceGroup(s.format(R.string.acc_devices_other, others.size), accent = Purple) {
+                            others.forEach { d -> DeviceRow(d, d.seen, s[R.string.acc_remove]) { confirm = d.hwid } }
                         }
                     }
                 }
             }
             Section {
-                Row(Modifier.fillMaxWidth().clickable { onLogout() }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_session], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                Row(Modifier.fillMaxWidth().clickable { confirmLogout = true }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(s[R.string.acc_session], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(
                         s[R.string.acc_logout],
                         color = Color(0xFFF87171),
@@ -255,8 +264,78 @@ internal fun AccountTab(ctx: Context, onLogout: () -> Unit, onSupport: () -> Uni
             }
             Section {
                 Row(Modifier.fillMaxWidth().clickable { onSupport() }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_support], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
+                    Text(s[R.string.acc_support], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(s[R.string.acc_support_open], color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Purple).padding(horizontal = 14.dp, vertical = 8.dp))
+                }
+            }
+        }
+    }
+    // Диалоги живут на уровне экрана (BoxScope), а не внутри прокручиваемого
+    // Column: иначе они «уезжают» вниз вместе со списком и их не видно.
+    if (confirm != null) {
+        val target = c?.devices?.find { it.hwid == confirm }
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(.6f)).clickable { confirm = null },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                Modifier.padding(24.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(s[R.string.acc_remove_title], color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(target?.title ?: "", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        s[R.string.acc_remove_no], color = Color.White,
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF1A2436))
+                            .clickable { confirm = null }.padding(horizontal = 20.dp, vertical = 10.dp)
+                    )
+                    Text(
+                        s[R.string.acc_remove_yes], color = Color.White,
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFFDC2626))
+                            .clickable {
+                                val hwid = confirm
+                                confirm = null
+                                if (hwid != null) scope.launch {
+                                    val ok = withContext(Dispatchers.IO) { Api.removeDevice(hwid) }
+                                    if (ok) load() else note = s[R.string.acc_remove_failed]
+                                }
+                            }.padding(horizontal = 20.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+    // Выход спрашивает подтверждение: случайное нажатие не должно выбрасывать
+    // из аккаунта и стирать сессию.
+    if (confirmLogout) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(.72f)).clickable { confirmLogout = false },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                Modifier.padding(26.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(s[R.string.acc_logout_confirm], color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    s[R.string.acc_logout_hint], color = Muted, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center
+                )
+                Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        s[R.string.acc_remove_no], color = Color.White, textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF1A2436)).clickable { confirmLogout = false }
+                            .padding(vertical = 12.dp)
+                    )
+                    Text(
+                        s[R.string.acc_logout_yes], color = Color.White, fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFFDC2626)).clickable { confirmLogout = false; onLogout() }
+                            .padding(vertical = 12.dp)
+                    )
                 }
             }
         }
@@ -360,8 +439,8 @@ internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
         val d = java.time.LocalDate.parse(c.expires.take(10))
         java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
     }.getOrNull()
-    val trafficValue = c.traffic.substringAfter("из ", c.traffic).trim()
-    val trafficSize = if (trafficValue.length > 8) 22.sp else 34.sp
+    val trafficValue = c.traffic.trim()
+    val trafficSize = 15.sp
     BoxWithConstraints(
         Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(22.dp))
             .background(Brush.linearGradient(listOf(Color(0xFFA78BFA), Color(0xFF9578F6), Color(0xFF7C5AEE), Color(0xFF6236C9), Color(0xFF4C1D95))))
@@ -377,8 +456,8 @@ internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BirdMark()
                 Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                    Text(s[R.string.sub_plan], color = Color.White.copy(.85f), fontSize = 12.sp)
-                    Text(c.plan, color = Color.White, fontSize = if (narrow) 15.sp else 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(s[R.string.sub_plan], color = Color.White.copy(.8f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .7.sp)
+                    Text(c.plan, color = Color.White, fontSize = if (narrow) 13.sp else 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Row(
                     Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0x8C24124E)).padding(horizontal = 10.dp, vertical = 6.dp),
@@ -390,16 +469,52 @@ internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
             }
             Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text(s[R.string.sub_traffic], color = Color.White, fontSize = if (narrow) 14.sp else 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp, maxLines = 1)
-                    Text(trafficValue, color = Color.White, fontSize = trafficSize, fontWeight = FontWeight.Normal, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    Text(s[R.string.sub_left], color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 8.dp), maxLines = 1)
-                    Text(if (days == null) s[R.string.fmt_none] else s.quantity(R.plurals.days, days), color = Color.White, fontSize = if (narrow) 22.sp else 26.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(s[R.string.sub_traffic], color = Color.White.copy(.8f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .7.sp, maxLines = 1)
+                    Text(trafficValue, color = Color.White, fontSize = trafficSize, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(s[R.string.sub_left], color = Color.White.copy(.8f), fontSize = 10.sp, letterSpacing = .7.sp, modifier = Modifier.padding(top = 8.dp), maxLines = 1)
+                    Text(if (days == null) s[R.string.fmt_none] else s.quantity(R.plurals.days, days), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
                 Column(Modifier.widthIn(min = 96.dp), horizontalAlignment = Alignment.End) {
-                    Text(s[R.string.acc_devices], color = Color.White.copy(.9f), fontSize = 11.sp, letterSpacing = 0.4.sp, maxLines = 1)
-                    Text(s.format(R.string.acc_devices_value, c.devicesUsed, c.deviceLimit), color = Color.White, fontSize = if (narrow) 18.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(s[R.string.acc_devices], color = Color.White.copy(.8f), fontSize = 10.sp, letterSpacing = .7.sp, maxLines = 1, fontWeight = FontWeight.SemiBold)
+                    Text(s.format(R.string.acc_devices_value, c.devicesUsed, c.deviceLimit), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
         }
     }
 }
+
+/** Заголовок группы устройств: линия, цветной маркер и подпись. Ячейки — отдельно. */
+@Composable
+private fun DeviceGroup(title: String, accent: Color, content: @Composable ColumnScope.() -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(1.dp).background(Color(0x1FFFFFFF)))
+    Row(Modifier.padding(top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(3.dp).height(11.dp).clip(RoundedCornerShape(2.dp)).background(accent))
+        Text(
+            title, color = Color(0xFF9AA8BB), fontSize = 11.sp, letterSpacing = 1.sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp)
+        )
+    }
+    Column(content = content)
+}
+
+/** Одно устройство — одна ячейка: свой фон, рамка и скругление. */
+@Composable
+private fun DeviceRow(d: pro.wingerapp.vpn.net.HwDevice, seen: String, removeLabel: String, onRemove: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(12.dp))
+            .background(Color(0x12FFFFFF))
+            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(d.title, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            if (seen.isNotBlank()) Text(seen, color = Muted, fontSize = 12.sp, maxLines = 1)
+        }
+        Text(
+            removeLabel, color = Color(0xFFF87171), fontSize = 12.5.sp,
+            modifier = Modifier.clickable { onRemove() }.padding(8.dp)
+        )
+    }
+}
+

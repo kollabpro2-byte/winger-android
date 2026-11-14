@@ -26,6 +26,14 @@
     <string name="home_tap_prefix">tap the </string>
     <string name="home_tap_suffix"> to connect</string>
     <string name="home_eagle">eagle</string>
+    <string name="home_orb_on">ON</string>
+    <string name="home_orb_off">OFF</string>
+    <string name="home_location">Current location</string>
+    <string name="home_select_server">choose a server</string>
+    <string name="home_ping_ms">%1$d ms</string>
+    <string name="home_days_left">left</string>
+    <string name="home_devices_label">devices</string>
+    <string name="home_traffic_label">traffic</string>
     <string name="home_plan_prefix">Plan </string>
     <string name="home_plan_left_prefix"> · </string>
     <string name="home_devices">Devices </string>
@@ -53,6 +61,8 @@
     <string name="set_dns_own">Custom</string>
     <string name="set_connection">CONNECTION</string>
     <string name="set_mux">Mux (not for vision)</string>
+    <string name="set_ipv6">IPv6 for the proxy address</string>
+    <string name="set_ipv6_hint">Off: the server address is resolved over A records (IPv4) only</string>
     <string name="set_core">CORE</string>
     <string name="set_core_log">Verbose core log</string>
     <string name="set_core_log_hint">Needed to find out why there is no connection</string>
@@ -68,6 +78,14 @@
 
     <!-- Account -->
     <string name="acc_account">ACCOUNT</string>
+    <string name="acc_devices_this">THIS PHONE</string>
+    <string name="acc_devices_other">OTHER DEVICES · %1$d</string>
+    <string name="acc_device_active">active</string>
+    <string name="acc_price_sign">₽</string>
+    <string name="acc_logout_confirm">Sign out?</string>
+    <string name="acc_logout_hint">The VPN keeps running until you turn it off. You will need your login and password to come back.</string>
+    <string name="acc_logout_yes">Yes, sign out</string>
+    <string name="pay_autopay_tag">subscription</string>
     <string name="acc_telegram">TELEGRAM</string>
     <string name="acc_telegram_hint">Link Telegram and claim the bonus</string>
     <string name="acc_telegram_bind">Link Telegram +3 days</string>
@@ -120,6 +138,8 @@
 
     <!-- Formatting -->
     <string name="fmt_gb_of">%1$s GB of %2$s</string>
+    <string name="fmt_gb_used">%1$s GB</string>
+    <string name="fmt_gb_unit">GB</string>
     <string name="fmt_gb">%1$.0f GB</string>
     <string name="fmt_none">—</string>
 
