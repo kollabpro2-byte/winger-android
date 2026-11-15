@@ -179,4 +179,22 @@ object Store {
 
     fun logClearMinutes(ctx: Context, minutes: Int) =
         write(ctx) { putInt("logClearMinutes", minutes.coerceIn(5, 120)) }
+
+    /**
+     * Какие разделы настроек пользователь раскрыл. `null` — он ещё ничего не
+     * трогал, тогда открываем только «Отображение». Если свернул — так и
+     * запоминаем: приложение не должно навязывать своё состояние.
+     */
+    fun openSections(ctx: Context): Set<String>? {
+        val raw = prefs(ctx)?.getString("openSections", null) ?: return null
+        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    fun openSections(ctx: Context, ids: Set<String>) =
+        write(ctx) { putString("openSections", ids.joinToString(",")) }
+
+    /** Раскрыт ли блок устройств в аккаунте (по умолчанию — да). */
+    fun devicesOpen(ctx: Context) = prefs(ctx)?.getBoolean("devicesOpen", true) ?: true
+
+    fun devicesOpen(ctx: Context, on: Boolean) = write(ctx) { putBoolean("devicesOpen", on) }
 }

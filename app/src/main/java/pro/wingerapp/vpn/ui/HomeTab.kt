@@ -232,7 +232,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
         if (on) tween(450) else tween(1200, delayMillis = 1600),
         label = "hint",
     )
-    val border = lerp(Color(0x1AFFFFFF), Cyan.copy(alpha = .55f), lit)
+    // Ободок: в покое он виден как тонкая «каря» (1.5 dp, 25% белого), при
+    // включении разгорается до 3.5 dp циановым — «пожирнее».
+    val border = lerp(Color(0x40FFFFFF), Cyan.copy(alpha = .85f), lit)
+    val borderWidth = 1.5f + 2f * lit
     val glow by animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
 
     Box(Modifier.fillMaxWidth().height(190.dp).padding(top = 6.dp), contentAlignment = Alignment.Center) {
@@ -251,7 +254,7 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                             listOf(Color(0xFF0E1B2C), Color(0xFF0A1220), Color(0xFF070C14))
                     )
                 )
-                .border(1.5.dp, border, CircleShape)
+                .border(borderWidth.dp, border, CircleShape)
                 .clickable { onToggle() },
             contentAlignment = Alignment.Center
         ) {
@@ -264,7 +267,7 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
             // Орёл: только на включённом, 48 dp вместо прежних 96.
             Image(
                 painterResource(R.drawable.eagle), null,
-                Modifier.size(48.dp).graphicsLayer {
+                Modifier.size(32.dp).graphicsLayer {
                     alpha = lit
                     scaleX = eagleScale
                     scaleY = eagleScale
@@ -426,7 +429,7 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
         BoxWithConstraints(Modifier.weight(1f)) {
             // Имя подгоняется по ширине: длинное название уменьшается, пока не
             // влезет целиком, вместо обрезки многоточием.
-            val nameSize = fitNameSize(place, maxWidth, 13.sp, 7.sp)
+            val nameSize = fitNameSize(place, maxWidth, 19.5.sp, 10.sp)
             Text(
                 place, color = TextMain, fontSize = nameSize, fontWeight = FontWeight.Bold,
                 maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
@@ -576,8 +579,11 @@ private fun rememberListScale(groups: List<ServerGroup>): State<Float> {
     return produceState(1f, groups, widthDp, measurer, density) {
         val longest = groups.flatMap { it.nodes }.maxByOrNull { it.name.length }?.name.orEmpty()
         val available = (widthDp - 32f - 24f - 14f - 8f - 44f).coerceAtLeast(120f)
-        var scale = (widthDp / 390f).coerceIn(0.95f, 1.25f)
-        while (scale > 0.8f) {
+        // SRV_ZOOM = 1.5: секции серверов крупнее, как в утверждённом макете.
+        // Если длинное имя перестаёт влезать, масштаб шагами уменьшается —
+        // «крупнее, но всегда целиком».
+        var scale = (widthDp / 390f).coerceIn(0.95f, 1.25f) * 1.5f
+        while (scale > 1.0f) {
             val width = measurer.measure(
                 text = AnnotatedString(longest),
                 style = TextStyle(fontSize = (13f * scale).sp),
@@ -596,9 +602,14 @@ private fun ServerRow(
     ms: Int?, noneLabel: String, unknownLabel: String, scale: Float = 1f, onClick: () -> Unit
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = (3f * scale).dp).clip(RoundedCornerShape(14.dp))
+        Modifier.fillMaxWidth().padding(vertical = (3f * scale).dp)
+            .clip(RoundedCornerShape((14f * scale).dp))
             .background(if (selected) Purple.copy(alpha = .30f) else Elev)
-            .border(if (selected) 2.dp else 1.dp, if (selected) Purple else Line, RoundedCornerShape(14.dp))
+            .border(
+                if (selected) 2.dp else 1.dp,
+                if (selected) Purple else Line,
+                RoundedCornerShape((14f * scale).dp)
+            )
             .clickable { onClick() }
             .padding(horizontal = (12f * scale).dp, vertical = (8f * scale).dp),
         verticalAlignment = Alignment.CenterVertically

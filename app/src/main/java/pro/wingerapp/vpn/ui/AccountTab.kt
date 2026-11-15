@@ -226,8 +226,17 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                 }
             }
             Section {
-                var devicesOpen by remember { mutableStateOf(true) }
-                Row(Modifier.fillMaxWidth().clickable { devicesOpen = !devicesOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                // Состояние «устройства свёрнуты» запоминаем: если человек свернул,
+                // не надо раскрывать это снова при следующем заходе.
+                var devicesOpen by remember { mutableStateOf(Store.devicesOpen(ctx)) }
+                Row(
+                    Modifier.fillMaxWidth().clickable {
+                        devicesOpen = !devicesOpen
+                        Store.devicesOpen(ctx, devicesOpen)
+                    },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(s[R.string.acc_devices], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(if (devicesOpen) s[R.string.acc_collapse] else s[R.string.acc_expand], color = Cyan, fontSize = 12.sp)
                 }

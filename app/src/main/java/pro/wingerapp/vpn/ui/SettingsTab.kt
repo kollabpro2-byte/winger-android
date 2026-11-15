@@ -48,12 +48,18 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
     var v6 by remember { mutableStateOf(Store.ipv6Proxy(ctx)) }
     var rate by remember { mutableStateOf(Store.trafficIntervalSec(ctx)) }
     var clearMin by remember { mutableStateOf(Store.logClearMinutes(ctx)) }
-    var logOpen by remember { mutableStateOf(false) }
-    var open by remember { mutableStateOf(setOf("theme")) }
+    // Берём то, что пользователь оставил в прошлый раз; если ещё не трогал —
+    // раскрыт только «Отображение».
+    var open by remember { mutableStateOf(Store.openSections(ctx) ?: setOf("theme")) }
 
     fun toggle(id: String) {
         open = if (id in open) open - id else open + id
+        Store.openSections(ctx, open)
     }
+
+    // «ЛОГ» — тоже раздел: его состояние живёт в том же наборе, поэтому
+    // раскрытый/свёрнутый лог запоминается между запусками.
+    val logOpen = "log" in open
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -190,7 +196,7 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
         // ЛОГ: строка-раздел, раскрывается вниз вместе с настройкой очистки.
         Box(Modifier.fillMaxWidth().padding(top = 14.dp).height(1.dp).background(Line))
         Row(
-            Modifier.fillMaxWidth().padding(top = 12.dp).clickable { logOpen = !logOpen },
+            Modifier.fillMaxWidth().padding(top = 12.dp).clickable { toggle("log") },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
