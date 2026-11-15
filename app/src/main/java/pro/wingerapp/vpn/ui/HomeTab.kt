@@ -607,7 +607,9 @@ private fun ServerRow(
                 RoundedCornerShape((14f * scale).dp)
             )
             .clickable { onClick() }
-            .padding(horizontal = (12f * scale).dp, vertical = (8f * scale).dp),
+            // Отступы внутри секции: при масштабе 1.5 это 15 dp, поэтому строка
+            // получается заметно выше прежней — как в макете.
+            .padding(horizontal = (12f * scale).dp, vertical = (10f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
