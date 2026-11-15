@@ -111,9 +111,12 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                     }
                 }
             }
+            // Разделяем два блока внутри раздела: тема и частота трафика — разные
+            // настройки, без черты они читаются как одна группа.
+            Box(Modifier.fillMaxWidth().padding(top = 12.dp).height(1.dp).background(Line))
             Text(
                 s[R.string.set_traffic_rate], color = TextMain, fontSize = 14.sp,
-                fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 14.dp)
+                fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 10.dp)
             )
             Text(
                 s[R.string.set_traffic_rate_hint], color = Muted, fontSize = 11.sp,

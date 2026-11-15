@@ -310,26 +310,64 @@ private fun VDivider() {
 
 @Composable
 private fun Stat(mod: Modifier, kind: StatKind, tint: Color, bg: Color, label: String, value: String, unit: String? = null) {
+    // Значение делим на число и «хвост»: «436 дней» → «436» + мелкое «дней»,
+    // «285 ГБ» → «285» + мелкое «ГБ». Если в хвосте есть цифры («2 из 3»),
+    // не делим — иначе получилось бы «2» + «из 3» мелким.
+    val parts = value.trim().split(" ", limit = 2)
+    val number = parts[0]
+    val tail = parts.getOrNull(1)
+    val suffix = unit ?: tail?.takeIf { it.none { ch -> ch.isDigit() } }
+    val whole = if (suffix == null) value.trim() else number
+
     Row(mod.padding(horizontal = 9.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(26.dp).clip(RoundedCornerShape(9.dp)).background(bg), contentAlignment = Alignment.Center) {
             StatIcon(kind, tint)
         }
-        Column(Modifier.padding(start = 9.dp)) {
-            Text(label, color = Muted, fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1)
-            Row {
-                Text(
-                    value, color = TextMain, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
-                )
-                // Единица измерения — мелкой подписью рядом: «197,0» + «ГБ»
-                // укладывается там, где «197,0 ГБ» пришлось бы обрезать.
-                if (unit != null) Text(
-                    unit, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, softWrap = false,
-                    modifier = Modifier.padding(start = 2.dp, top = 3.dp)
-                )
+        Column(Modifier.padding(start = 9.dp).weight(1f)) {
+            Text(label, color = Muted, fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1, overflow = TextOverflow.Clip)
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                // Кегль подбирается по ширине ячейки: на узких экранах и при
+                // крупных числах значение уменьшается, а не обрезается.
+                val size = fitValueSize(whole, suffix, maxWidth, 12.5.sp, 8.sp)
+                Row {
+                    Text(
+                        whole, color = TextMain, fontSize = size, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    )
+                    if (suffix != null) Text(
+                        suffix, color = Muted, fontSize = (size.value * .72f).sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, softWrap = false,
+                        modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Подбирает кегль значения так, чтобы число и мелкая единица влезли в [available].
+ * Идём от [max] вниз шагом 0.5 sp: «285 ГБ» на узком экране уменьшается целиком,
+ * а не обрезается.
+ */
+@Composable
+private fun fitValueSize(number: String, suffix: String?, available: Dp, max: TextUnit, min: TextUnit): TextUnit {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(number, suffix, available, max, min) {
+        var size = max
+        while (size.value > min.value) {
+            val style = TextStyle(fontSize = size, fontWeight = FontWeight.SemiBold)
+            var width = measurer.measure(AnnotatedString(number), style).size.width
+            if (suffix != null) {
+                val tailStyle = TextStyle(fontSize = (size.value * .72f).sp, fontWeight = FontWeight.SemiBold)
+                width += measurer.measure(AnnotatedString(suffix), tailStyle).size.width
+                width += with(density) { 4.dp.toPx() }.toInt()
+            }
+            if (with(density) { width.toDp() } <= available) break
+            size = (size.value - 0.5f).sp
+        }
+        size
     }
 }
 
