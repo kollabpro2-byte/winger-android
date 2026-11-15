@@ -116,7 +116,8 @@ private val DarkPalette = Palette(
 )
 
 private val MidPalette = Palette(
-    bgTop = Color(0xFF34373B), bgBottom = Color(0xFF2A2D2F),
+    // Тёмно-синее «сукно»: выбранный пользователем оттенок.
+    bgTop = Color(0xFF2A3550), bgBottom = Color(0xFF1F2740),
     // Подложка та же, что в тёмной: элементы не перекрашиваем, только фон.
     elev = Color(0xFF0A162A), cyan = Color(0xFF6FE8FA), purple = Color(0xFFA855F7),
     muted = Color(0xFFC2D0E0), dim = Color(0xFFA9B8CA),

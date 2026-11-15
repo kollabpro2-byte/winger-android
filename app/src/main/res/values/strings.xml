@@ -25,6 +25,7 @@
     <string name="home_no_subscription_hint">Перейдите во вкладку Аккаунт</string>
     <string name="home_orb_hint">включить</string>
     <string name="home_location">Текущее местоположение</string>
+    <string name="home_not_selected">Не выбрано</string>
     <string name="home_select_server">выберите сервер</string>
     <string name="home_ping_ms">%1$d мс</string>
     <string name="home_days_left">осталось</string>

@@ -150,7 +150,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (ping) {
                 result.nodes?.let { pingAll(it) }
             } else {
-                delay(2600)
+                // Держим сообщение 2.1 с, дальше Compose плавно гасит его за
+                // 0.9 с — ровно вместе со вспышкой кнопки обновления.
+                delay(2100)
                 _state.update { if (it.notice == fresh) it.copy(notice = null) else it }
             }
             _state.update { it.copy(pinging = false, refreshing = false) }

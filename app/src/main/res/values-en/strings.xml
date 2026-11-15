@@ -25,6 +25,7 @@
     <string name="home_no_subscription_hint">Open the Account tab</string>
     <string name="home_orb_hint">turn on</string>
     <string name="home_location">Current location</string>
+    <string name="home_not_selected">Not selected</string>
     <string name="home_select_server">choose a server</string>
     <string name="home_ping_ms">%1$d ms</string>
     <string name="home_days_left">left</string>

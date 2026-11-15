@@ -2,8 +2,13 @@ package pro.wingerapp.vpn.ui
 
 import android.content.Context
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -21,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -87,20 +93,20 @@ internal fun HomeTab(
     // имя перестало влезать целиком.
     val listScale by rememberListScale(groups)
 
-    // «подписка обновлена» — тихой строкой в шапке списка. Только альфа: строка
-    // уже занимает место, поэтому ничего не сдвигается.
+    // «подписка обновлена» держится 2.1 с и гаснет 0.9 с — ровно столько же,
+    // сколько вспышка кнопки обновления: заканчиваются одновременно (3.0 с).
     val noticeAlpha = remember { Animatable(0f) }
     LaunchedEffect(notice) {
         if (notice.isNullOrBlank()) {
-            noticeAlpha.animateTo(0f, tween(600))
+            noticeAlpha.animateTo(0f, tween(900))
         } else {
             noticeAlpha.snapTo(0f)
             noticeAlpha.animateTo(1f, tween(900))
         }
     }
 
-    // Вспышка кнопки обновления после успеха: один удар и плавное затухание.
-    // Два подряд читались как мигание, а не как «готово».
+    // Вспышка кнопки обновления: один удар, удержание яркости и затухание
+    // синхронно с текстом — 3.0 с от появления.
     val flash = remember { Animatable(0f) }
     var wasRefreshing by remember { mutableStateOf(false) }
     LaunchedEffect(refreshing, err) {
@@ -111,9 +117,10 @@ internal fun HomeTab(
         flash.animateTo(
             0f,
             keyframes {
-                durationMillis = 2400
-                0.92f at 720
-                0f at 2300
+                durationMillis = 3000
+                0.92f at 600
+                0.86f at 2100
+                0f at 3000
             },
         )
     }
@@ -152,14 +159,15 @@ internal fun HomeTab(
         val pingMs = pings[place]
         // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
         Text(s[R.string.home_location], color = Caption, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
-        LocationCard(
-            place = place.ifBlank { s[R.string.home_select_server] },
+        LocationRow(
+            place = place,
             ping = when {
                 place.isBlank() || !pings.containsKey(place) -> null
                 pingMs == null || pingMs == -1 -> s[R.string.home_ping_unknown]
                 else -> s.format(R.string.home_ping_ms, pingMs)
             },
             live = on,
+            on = on,
         )
 
         err?.let {
@@ -220,10 +228,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
         if (on) tween(2000, delayMillis = 500) else tween(1500),
         label = "lit",
     )
-    val eagleScale by animateFloatAsState(
-        if (on) 1f else 0.88f,
-        if (on) tween(2400, delayMillis = 500) else tween(1700),
-        label = "eagleScale",
+    val eagleDrop by animateFloatAsState(
+        if (on) 0f else -52f,
+        if (on) tween(1900, delayMillis = 100) else tween(1500),
+        label = "eagleDrop",
     )
     // Подпись: появляется с задержкой 1.6 с (орла уже нет), исчезает за 0.45 с.
     val hintAlpha by animateFloatAsState(
@@ -235,9 +243,19 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
     // (3 dp, 35% белого), при включении разгорается циановым и чуть толстеет.
     val border = lerp(Color(0x59FFFFFF), Cyan.copy(alpha = .9f), lit)
     val borderWidth = 3f + 1.5f * lit
-    // Ореол: только лёгкая подсветка внутри круга, без «прожектора» —
-    // сильно горящий ореол вокруг орла не нужен.
-    val glow by animateFloatAsState(if (on) 0.45f else 0f, tween(2400), label = "glow")
+    // Ореол «дышит» в такт с градиентом названия: 3.7 с, пик на половине цикла.
+    val breath = rememberInfiniteTransition(label = "breath")
+    val breathAlpha by breath.animateFloat(
+        0.5f, 1f,
+        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "breathAlpha",
+    )
+    val breathScale by breath.animateFloat(
+        0.94f, 1.07f,
+        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "breathScale",
+    )
+    val glow by animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
 
     Box(Modifier.fillMaxWidth().height(190.dp).padding(top = 6.dp), contentAlignment = Alignment.Center) {
         Box(
@@ -260,19 +278,26 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                 .clickable(onClickLabel = hint) { onToggle() },
             contentAlignment = Alignment.Center
         ) {
-            // Внутреннее свечение — только при включении и совсем слабое.
+            // Свечение из центра: мягкое пятно, «дышит» при включении.
             Box(
-                Modifier.matchParentSize().alpha(glow).background(
-                    Brush.radialGradient(listOf(Color(0x3322D3EE), Color(0x0A22D3EE), Color(0x0022D3EE)))
-                )
+                Modifier.matchParentSize().padding(6.dp)
+                    .graphicsLayer {
+                        alpha = glow * breathAlpha
+                        scaleX = breathScale
+                        scaleY = breathScale
+                    }
+                    .background(
+                        Brush.radialGradient(
+                            listOf(Color(0x5C22D3EE), Color(0x1F22D3EE), Color(0x0022D3EE))
+                        )
+                    )
             )
-            // Орёл: только на включённом, 48 dp вместо прежних 96.
+            // Орёл: при включении опускается сверху вниз к центру (36.5 dp).
             Image(
                 painterResource(R.drawable.eagle), null,
-                Modifier.size(30.dp).graphicsLayer {
+                Modifier.size(36.5.dp).graphicsLayer {
                     alpha = lit
-                    scaleX = eagleScale
-                    scaleY = eagleScale
+                    translationY = eagleDrop * density
                 },
                 contentScale = ContentScale.Fit,
             )
@@ -415,30 +440,61 @@ private fun StatIcon(kind: StatKind, tint: Color) {
 
 
 /**
- * Карточка локации. Имя берётся из подписки как есть — флаги уже в названии,
- * поэтому отдельного значка страны нет. Справа на той же линии — обновление
- * подписки и замер пинга.
+ * Текущая локация — не карточка и не кнопка: строка с тонкой линией снизу.
+ * Название залито градиентом из палитры орла (бирюза → синий → пурпур) и
+ * «течёт» в такт его свечению (3.7 с). Если сервер не выбран — «Не выбрано»
+ * серым, без градиента и анимации.
  */
 @Composable
-private fun LocationCard(place: String, ping: String?, live: Boolean) {
-    // В светлой теме полупрозрачная тонировка на сером фоне почти не видна —
-    // подкладываем светлую карточку, а тонировку оставляем акцентом.
+private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean) {
+    val s = rememberStrings()
+    val hasChoice = place.isNotBlank()
+    // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола.
+    val flow = rememberInfiniteTransition(label = "flow")
+    val shift by flow.animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "shift",
+    )
+
     Row(
-        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
-            .background(if (AppTheme.p.isLight) Elev else Color.Transparent)
-            .background(Brush.linearGradient(listOf(Color(0x338B5CF6), Color(0x223B82F6), Color(0x2222D3EE))))
-            .border(1.dp, if (AppTheme.p.isLight) CardLine else Purple.copy(alpha = .32f), RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp)
+            .drawBehind {
+                val y = size.height - 1.dp.toPx() / 2f
+                drawLine(Line, Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
+            },
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
-            // Имя подгоняется по ширине: длинное название уменьшается, пока не
-            // влезет целиком, вместо обрезки многоточием.
-            val nameSize = fitNameSize(place, maxWidth, 14.25.sp, 9.sp)
-            Text(
-                place, color = TextMain, fontSize = nameSize, fontWeight = FontWeight.Bold,
-                maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
-            )
+            val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 9.sp)
+            if (hasChoice) {
+                // Градиент по буквам: два стопа сдвигаются анимацией, поэтому
+                // цвет «переливается» по названию.
+                val colors = if (AppTheme.p.isLight)
+                    listOf(Color(0xFF0A9C99), Color(0xFF1D5CF5), Color(0xFFC81ED6), Color(0xFF1D5CF5))
+                else
+                    listOf(Color(0xFF3BFFE4), Color(0xFF4C93FF), Color(0xFFE85CFF), Color(0xFF4C93FF))
+                val animated = if (on) shift else 0f
+                Text(
+                    place,
+                    style = TextStyle(
+                        brush = Brush.linearGradient(
+                            colors = colors,
+                            start = Offset(animated * 260f, 0f),
+                            end = Offset(animated * 260f + 220f, 0f),
+                        ),
+                        fontSize = nameSize,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                )
+            } else {
+                Text(
+                    s[R.string.home_not_selected], color = Dim, fontSize = nameSize,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                )
+            }
         }
         // Пинг — справа от названия, в той же строке.
         Row(
@@ -447,11 +503,14 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
         ) {
             Box(
                 Modifier.size(7.dp).clip(CircleShape)
-                    .background(if (live) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A)) else (if (AppTheme.p.isLight) Color(0xFF8296AA) else Color(0xFF5A6A7E)))
+                    .background(
+                        if (live) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A))
+                        else (if (AppTheme.p.isLight) Color(0xFF8296AA) else Color(0xFF5A6A7E))
+                    )
             )
-            Text(
-                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7), fontSize = 8.25.sp,
-                modifier = Modifier.padding(start = 6.dp)
+            if (hasChoice) Text(
+                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7),
+                fontSize = 8.25.sp, modifier = Modifier.padding(start = 6.dp),
             )
         }
     }
