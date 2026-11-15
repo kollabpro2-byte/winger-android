@@ -99,7 +99,8 @@ internal fun HomeTab(
         }
     }
 
-    // Вспышка кнопки обновления после успеха: два удара и долгое затухание.
+    // Вспышка кнопки обновления после успеха: один удар и плавное затухание.
+    // Два подряд читались как мигание, а не как «готово».
     val flash = remember { Animatable(0f) }
     var wasRefreshing by remember { mutableStateOf(false) }
     LaunchedEffect(refreshing, err) {
@@ -110,11 +111,9 @@ internal fun HomeTab(
         flash.animateTo(
             0f,
             keyframes {
-                durationMillis = 3200
-                0.78f at 480
-                0.55f at 960
-                0.92f at 1440
-                0f at 3000
+                durationMillis = 2400
+                0.92f at 720
+                0f at 2300
             },
         )
     }
@@ -185,7 +184,7 @@ internal fun HomeTab(
                 )
             } else {
                 Text(
-                    s[group.titleRes], color = Caption, fontSize = (11f * listScale).sp, fontWeight = FontWeight.Bold,
+                    s[group.titleRes], color = Caption, fontSize = (8f * listScale).sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = (10f * listScale).dp, bottom = (4f * listScale).dp)
                 )
             }
@@ -270,7 +269,7 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
             // Орёл: только на включённом, 48 dp вместо прежних 96.
             Image(
                 painterResource(R.drawable.eagle), null,
-                Modifier.size(32.dp).graphicsLayer {
+                Modifier.size(30.dp).graphicsLayer {
                     alpha = lit
                     scaleX = eagleScale
                     scaleY = eagleScale
@@ -435,7 +434,7 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
         BoxWithConstraints(Modifier.weight(1f)) {
             // Имя подгоняется по ширине: длинное название уменьшается, пока не
             // влезет целиком, вместо обрезки многоточием.
-            val nameSize = fitNameSize(place, maxWidth, 19.5.sp, 10.sp)
+            val nameSize = fitNameSize(place, maxWidth, 14.25.sp, 9.sp)
             Text(
                 place, color = TextMain, fontSize = nameSize, fontWeight = FontWeight.Bold,
                 maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
@@ -451,7 +450,7 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
                     .background(if (live) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A)) else (if (AppTheme.p.isLight) Color(0xFF8296AA) else Color(0xFF5A6A7E)))
             )
             Text(
-                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7), fontSize = 10.5.sp,
+                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7), fontSize = 8.25.sp,
                 modifier = Modifier.padding(start = 6.dp)
             )
         }
@@ -536,14 +535,19 @@ private fun ListHeaderRow(
         Modifier.fillMaxWidth().padding(top = (12f * scale).dp, bottom = (12f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, color = Caption, fontSize = (11f * scale).sp, fontWeight = FontWeight.Bold)
-        Text(
-            noticeText, color = NoticeCyan.copy(alpha = noticeAlpha),
-            fontSize = (11f * scale).sp, fontWeight = FontWeight.SemiBold,
-            letterSpacing = .25.sp, maxLines = 1, softWrap = false,
-            textAlign = TextAlign.Center, overflow = TextOverflow.Clip,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-        )
+        Text(title, color = Caption, fontSize = (8f * scale).sp, fontWeight = FontWeight.Bold)
+        // «подписка обновлена» должно влезать целиком: свободного места между
+        // заголовком и кнопками немного, поэтому кегль подбирается по ширине.
+        BoxWithConstraints(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            val noteSize = fitNoteSize(noticeText, maxWidth, (9f * scale).sp, (6f * scale).sp)
+            Text(
+                noticeText, color = NoticeCyan.copy(alpha = noticeAlpha),
+                fontSize = noteSize, fontWeight = FontWeight.SemiBold,
+                letterSpacing = .25.sp, maxLines = 1, softWrap = false,
+                textAlign = TextAlign.Center, overflow = TextOverflow.Clip,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         // Вспышка кнопки обновления: два удара и долгое затухание.
         val baseBg = if (AppTheme.p.isLight) Color(0xFFF4F7FA) else Color.White.copy(alpha = .06f)
         val baseRing = if (AppTheme.p.isLight) Color(0xFF7E8B9C) else Color.White.copy(alpha = .10f)
@@ -612,15 +616,13 @@ private fun ServerRow(
             .padding(horizontal = (12f * scale).dp, vertical = (10f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            if (selected) "✓" else "", color = Purple, fontSize = (14f * scale).sp,
-            fontWeight = FontWeight.Bold, modifier = Modifier.width((14f * scale).dp)
-        )
-        Column(Modifier.weight(1f).padding(start = (4f * scale).dp)) {
+        // Галочки нет: выбранная строка и так отличается заливкой, рамкой и
+        // левой сиреневой полосой, а её место занимает название.
+        Column(Modifier.weight(1f)) {
             // Имя подбирает свой кегль под ширину ячейки: сама секция крупная,
             // но длинное название не обрезается многоточием.
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val nameSize = fitNameSize(node.name, maxWidth, (13f * scale).sp, (9f * scale).sp)
+                val nameSize = fitNameSize(node.name, maxWidth, (9.5f * scale).sp, (6.5f * scale).sp)
                 Text(
                     node.name,
                     color = if (selected) (if (AppTheme.p.isLight) Color(0xFF3B0764) else Color.White) else TextMain,
@@ -628,9 +630,17 @@ private fun ServerRow(
                     fontSize = nameSize, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
                 )
             }
-            // Протокол — мелкой подписью: «VLESS TCP REALITY JSON» заметно тише
-            // названия, чтобы не спорить с ним за внимание.
-            Text(proto, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Протокол — мелкая голубая подпись: «VLESS TCP REALITY JSON».
+            // В светлой теме синий темнее, иначе на белом не читается.
+            val protoColor = when {
+                AppTheme.p.isLight -> Color(0xFF2F5FA8)
+                AppTheme.mode == ThemeMode.MID -> Color(0xFFB7D9FF)
+                else -> Color(0xFF8FB8FF)
+            }
+            Text(
+                proto, color = protoColor, fontSize = (5.25f * scale).sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         when {
             waiting -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
@@ -645,15 +655,15 @@ private fun ServerRow(
                     else -> p.pingSlow
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(6.dp).clip(CircleShape).background(c))
+                    Box(Modifier.size(5.dp).clip(CircleShape).background(c))
                     Text(
                         when {
                             ms == null -> noneLabel
                             ms == -1 -> unknownLabel
                             else -> ms.toString()
                         },
-                        color = c, fontSize = (11f * scale).sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 6.dp)
+                        color = c, fontSize = (8.25f * scale).sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = (3f * scale).dp)
                     )
                 }
             }
@@ -756,6 +766,28 @@ private fun PowerIcon(tint: Color, size: Dp) {
             Offset(cx, h / 2f - r * .1f),
             stroke, StrokeCap.Round,
         )
+    }
+}
+
+/**
+ * Подбирает кегль строки-сообщения («подписка обновлена») под свободное место:
+ * идём от [max] вниз шагом 0.5 sp, пока текст не влезет целиком.
+ */
+@Composable
+private fun fitNoteSize(text: String, available: Dp, max: TextUnit, min: TextUnit): TextUnit {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(text, available, max, min) {
+        var size = max
+        while (size.value > min.value) {
+            val width = measurer.measure(
+                text = AnnotatedString(text),
+                style = TextStyle(fontSize = size, fontWeight = FontWeight.SemiBold, letterSpacing = .25.sp),
+            ).size.width
+            if (with(density) { width.toDp() } <= available) break
+            size = (size.value - 0.5f).sp
+        }
+        size
     }
 }
 
