@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pro.wingerapp.vpn.BuildConfig
@@ -229,26 +233,23 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                     log.ifBlank { s[R.string.set_log_empty] }, color = Muted, fontSize = 12.sp,
                     modifier = Modifier.padding(top = 10.dp)
                 )
-                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Цвет текста у кнопок фиксирован белым: в светлой теме они
-                    // наследовали тёмный и «Обновить» пропадала на тёмной плашке.
-                    Box(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(CardSoft)
-                            .clickable { log = VpnLog.text() }.padding(10.dp)
-                    ) { Text(s[R.string.set_refresh], color = OnCard) }
-                    Box(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(Purple).clickable {
-                            ctx.getSystemService(ClipboardManager::class.java)
-                                .setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
-                        }.padding(10.dp)
-                    ) { Text(s[R.string.set_copy], color = OnAccent) }
-                    Box(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF8B3A3A))
-                            .clickable {
-                                VpnLog.clear()
-                                log = ""
-                            }.padding(10.dp)
-                    ) { Text(s[R.string.set_clear], color = OnAccent) }
+                // Кнопки делят ширину поровну и ужимают текст: на узких экранах
+                // «Скопировать» больше не выталкивает третью кнопку за край.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    LogButton(s[R.string.set_refresh], CardSoft, OnCard, Modifier.weight(1f)) {
+                        log = VpnLog.text()
+                    }
+                    LogButton(s[R.string.set_copy], Purple, OnAccent, Modifier.weight(1f)) {
+                        ctx.getSystemService(ClipboardManager::class.java)
+                            .setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
+                    }
+                    LogButton(s[R.string.set_clear], Color(0xFF8B3A3A), OnAccent, Modifier.weight(1f)) {
+                        VpnLog.clear()
+                        log = ""
+                    }
                 }
             }
         }
@@ -319,4 +320,46 @@ private fun fieldColors() = TextFieldDefaults.colors(
     focusedIndicatorColor = Purple,
     unfocusedIndicatorColor = Line,
 )
+
+
+/**
+ * Кнопка лога: занимает отведённую долю ширины, текст по центру и уменьшается,
+ * если не влезает. Раньше кнопки были по содержимому и на узких экранах
+ * «Скопировать» вылезала за край карточки.
+ */
+@Composable
+private fun LogButton(label: String, bg: Color, fg: Color, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.clip(RoundedCornerShape(12.dp)).background(bg).clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        BoxWithConstraints {
+            val size = fitLabelSize(label, maxWidth, 13.sp, 9.sp)
+            Text(
+                label, color = fg, fontSize = size, maxLines = 1,
+                softWrap = false, overflow = TextOverflow.Clip, textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+/** Подбирает кегль подписи кнопки под её ширину. */
+@Composable
+private fun fitLabelSize(text: String, available: Dp, max: TextUnit, min: TextUnit): TextUnit {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    return remember(text, available, max, min) {
+        var size = max
+        while (size.value > min.value) {
+            val width = measurer.measure(
+                text = androidx.compose.ui.text.AnnotatedString(text),
+                style = androidx.compose.ui.text.TextStyle(fontSize = size),
+            ).size.width
+            if (with(density) { width.toDp() } <= available) break
+            size = (size.value - 0.5f).sp
+        }
+        size
+    }
+}
 

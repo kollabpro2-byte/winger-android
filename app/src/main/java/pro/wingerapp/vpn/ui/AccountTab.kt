@@ -255,11 +255,18 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                     Text(s[R.string.acc_session], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(
                         s[R.string.acc_logout],
-                        color = Color(0xFFF87171),
+                        // В светлой теме тёмная плашка с красной обводкой смотрелась
+                        // чужой — там это обычная красная кнопка с белым текстом.
+                        color = if (AppTheme.p.isLight) OnAccent else Color(0xFFF87171),
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF1F1626))
-                            .border(1.dp, Color(0xFFF87171).copy(.5f), RoundedCornerShape(20.dp))
+                            .background(if (AppTheme.p.isLight) Color(0xFFDC2626) else Color(0xFF1F1626))
+                            .border(
+                                1.dp,
+                                if (AppTheme.p.isLight) Color(0xFFDC2626) else Color(0xFFF87171).copy(.5f),
+                                RoundedCornerShape(20.dp)
+                            )
+                            .clickable { confirmLogout = true }
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                     )
                 }
@@ -491,11 +498,15 @@ internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
 /** Заголовок группы устройств: линия, цветной маркер и подпись. Ячейки — отдельно. */
 @Composable
 private fun DeviceGroup(title: String, accent: Color, content: @Composable ColumnScope.() -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(1.dp).background(Color(0x1FFFFFFF)))
+    // В светлой теме белая полупрозрачная линия на белой карточке не видна.
+    Box(
+        Modifier.fillMaxWidth().padding(top = 16.dp).height(1.dp)
+            .background(if (AppTheme.p.isLight) Color(0x1A0F172A) else Color(0x1FFFFFFF))
+    )
     Row(Modifier.padding(top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(3.dp).height(11.dp).clip(RoundedCornerShape(2.dp)).background(accent))
         Text(
-            title, color = Color(0xFF9AA8BB), fontSize = 11.sp, letterSpacing = 1.sp,
+            title, color = Caption, fontSize = 11.sp, letterSpacing = 1.sp,
             fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp)
         )
     }
@@ -505,10 +516,13 @@ private fun DeviceGroup(title: String, accent: Color, content: @Composable Colum
 /** Одно устройство — одна ячейка: свой фон, рамка и скругление. */
 @Composable
 private fun DeviceRow(d: pro.wingerapp.vpn.net.HwDevice, seen: String, removeLabel: String, onRemove: () -> Unit) {
+    // На белой карточке заливка 7% белого и рамка 10% белого невидимы — в светлой
+    // теме ячейка получает серую подложку и тёмную границу.
+    val light = AppTheme.p.isLight
     Row(
         Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(12.dp))
-            .background(Color(0x12FFFFFF))
-            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(12.dp))
+            .background(if (light) Color(0xFFEDF1F6) else Color(0x12FFFFFF))
+            .border(1.dp, if (light) Color(0x1F0F172A) else Color(0x1AFFFFFF), RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

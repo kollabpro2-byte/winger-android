@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlin.math.cos
+import kotlin.math.sin
 import pro.wingerapp.vpn.BuildConfig
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.ServerNode
@@ -447,8 +449,10 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
     }
 }
 
-/** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления. */
-private val NoticeCyan = Color(0xFF7FE3FF)
+/** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления.
+ *  В светлой теме он должен быть темнее: неоновый на сером не читается. */
+private val NoticeCyan: Color
+    get() = if (AppTheme.p.isLight) Color(0xFF0E7490) else Color(0xFF7FE3FF)
 
 /**
  * Строка «↑ / таймер / ↓» в собственном composable: счётчики тикают раз в секунду,
@@ -543,7 +547,7 @@ private fun ListHeaderRow(
             contentAlignment = Alignment.Center
         ) {
             if (refreshing) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Cyan)
-            else Text("⟳", color = ink, fontSize = 15.sp)
+            else RefreshIcon(ink, 16.dp)
         }
         Spacer(Modifier.width(8.dp))
         Box(
@@ -668,6 +672,42 @@ private fun fitNameSize(text: String, available: Dp, max: TextUnit, min: TextUni
             size = (size.value - 0.5f).sp
         }
         size
+    }
+}
+
+/**
+ * Круговая стрелка обновления рисуется на Canvas, а не глифом «⟳»: у шрифтового
+ * символа разные боковые поля, и в кружке он садится ниже и левее центра —
+ * на маленьких экранах это заметно.
+ */
+@Composable
+private fun RefreshIcon(tint: Color, size: Dp) {
+    androidx.compose.foundation.Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * .11f
+        val r = w * .32f
+        val cx = w / 2f
+        val cy = h / 2f
+        // Дуга с разрывом сверху справа — там будет остриё.
+        drawArc(
+            color = tint,
+            startAngle = -55f,
+            sweepAngle = 300f,
+            useCenter = false,
+            topLeft = Offset(cx - r, cy - r),
+            size = Size(r * 2f, r * 2f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        // Остриё: две короткие линии от конца дуги.
+        val rad = Math.toRadians(-55.0)
+        val ex = cx + r * cos(rad).toFloat()
+        val ey = cy + r * sin(rad).toFloat()
+        val tip = w * .16f
+        val a1 = rad + Math.PI / 2
+        val a2 = rad - Math.PI / 2
+        drawLine(tint, Offset(ex, ey), Offset(ex - tip * cos(a1).toFloat(), ey - tip * sin(a1).toFloat()), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(ex, ey), Offset(ex - tip * cos(a2).toFloat(), ey - tip * sin(a2).toFloat()), stroke, StrokeCap.Round)
     }
 }
 
