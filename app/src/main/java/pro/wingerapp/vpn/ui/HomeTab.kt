@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
 import pro.wingerapp.vpn.BuildConfig
@@ -83,6 +84,7 @@ import pro.wingerapp.vpn.tunTraffic
 internal fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
     place: String, on: Boolean, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
+    noticeSeq: Int,
     trafficIntervalSec: Int,
     raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
@@ -96,26 +98,24 @@ internal fun HomeTab(
     // имя перестало влезать целиком.
     val listScale by rememberListScale(groups)
 
-    // «подписка обновлена» держится 2.1 с и гаснет 0.9 с — ровно столько же,
-    // сколько вспышка кнопки обновления: заканчиваются одновременно (3.0 с).
+    // ── один таймлайн на событие «подписка обновлена» ──────────────
+    // Раньше текст и вспышка кнопки жили каждый своим таймером: вспышка
+    // стартовала, когда VM снимала флаг refreshing (это происходило уже после
+    // гашения текста), и на телефоне они расходились. Теперь оба запускаются
+    // от одного счётчика noticeSeq и идут по общему таймлайну 3.0 с:
+    //   0.0–0.9 с — текст проявляется, кнопка разгорается (пик 0.6 с)
+    //   0.9–2.1 с — держим: текст виден, кнопка на 0.86
+    //   2.1–3.0 с — оба гаснут и приходят к нулю одновременно
     val noticeAlpha = remember { Animatable(0f) }
-    LaunchedEffect(notice) {
-        if (notice.isNullOrBlank()) {
-            noticeAlpha.animateTo(0f, tween(900))
-        } else {
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(noticeSeq) {
+        if (noticeSeq == 0) return@LaunchedEffect
+        launch {
             noticeAlpha.snapTo(0f)
             noticeAlpha.animateTo(1f, tween(900))
+            delay(1200)                       // до 2.1 с от старта
+            noticeAlpha.animateTo(0f, tween(900))
         }
-    }
-
-    // Вспышка кнопки обновления: один удар, удержание яркости и затухание
-    // синхронно с текстом — 3.0 с от появления.
-    val flash = remember { Animatable(0f) }
-    var wasRefreshing by remember { mutableStateOf(false) }
-    LaunchedEffect(refreshing, err) {
-        val succeeded = wasRefreshing && !refreshing && err == null
-        wasRefreshing = refreshing
-        if (!succeeded) return@LaunchedEffect
         flash.snapTo(0f)
         flash.animateTo(
             0f,

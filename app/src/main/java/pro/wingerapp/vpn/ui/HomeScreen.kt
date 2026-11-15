@@ -126,6 +126,7 @@ fun HomeScreen(
                 place = st.selected, on = on,
                 pinging = st.pinging, refreshing = st.refreshing,
                 err = st.error ?: tunnelError, notice = st.notice,
+                noticeSeq = st.noticeSeq,
                 trafficIntervalSec = trafficSec,
                 raw = st.raw, connect = connect, disconnect = disconnect,
                 reload = { ping -> vm.refresh(ping) },

@@ -43,6 +43,13 @@ data class SubscriptionState(
     val error: String? = null,
     val notice: String? = null,
     /**
+     * Номер события «подписка обновлена». Растёт на каждой успешной загрузке:
+     * по нему экран запускает ОДИН таймлайн для текста и вспышки кнопки.
+     * Строка для этого не годится — повторное обновление присылает тот же текст,
+     * и Compose не перезапустил бы анимацию.
+     */
+    val noticeSeq: Int = 0,
+    /**
      * «Включись сам»: выставляется один раз — когда после входа загрузилась
      * подписка и сервер уже выбран. Экран забирает флаг через [AppViewModel.consumeAutoConnect].
      */
@@ -189,14 +196,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     loading = false,
                     error = null,
                     notice = if (ping) it.notice else fresh,
+                    noticeSeq = if (ping) it.noticeSeq else it.noticeSeq + 1,
                 )
             }
             if (ping) {
                 result.nodes?.let { pingAll(it) }
             } else {
-                // Держим сообщение 2.1 с, дальше Compose плавно гасит его за
-                // 0.9 с — ровно вместе со вспышкой кнопки обновления.
-                delay(2100)
+                // Текст держим в состоянии, пока идёт вся анимация (3.0 с):
+                // плавность задаёт экран, а здесь важно не стереть строку
+                // раньше времени. Затем гасим — уже с нулевой прозрачностью.
+                delay(3000)
                 _state.update { if (it.notice == fresh) it.copy(notice = null) else it }
             }
             _state.update { it.copy(pinging = false, refreshing = false) }
