@@ -17,6 +17,19 @@ import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.net.Sub
 
+/** Имя узла, который выбирается автоматически после входа (v87 макета). */
+private const val AUTOPILOT_NAME = "Автопилот"
+
+/**
+ * Какой сервер выбрать сразу после входа: «Автопилот», если он есть в подписке,
+ * иначе первый в списке. Вынесено отдельной функцией, чтобы поведение можно
+ * было закрепить тестом без Android-окружения.
+ */
+internal fun pickAutoServer(names: List<String>): String =
+    names.firstOrNull { it.contains(AUTOPILOT_NAME, ignoreCase = true) }
+        ?: names.firstOrNull()
+        ?: ""
+
 /** Everything the home screen knows about the account and its subscription. */
 data class SubscriptionState(
     val plan: Sub? = null,
@@ -29,6 +42,11 @@ data class SubscriptionState(
     val pinging: Boolean = false,
     val error: String? = null,
     val notice: String? = null,
+    /**
+     * «Включись сам»: выставляется один раз — когда после входа загрузилась
+     * подписка и сервер уже выбран. Экран забирает флаг через [AppViewModel.consumeAutoConnect].
+     */
+    val autoConnect: Boolean = false,
 ) {
     val connectable: Boolean get() = raw.isNotBlank() && selected.isNotBlank()
 }
@@ -50,6 +68,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<SubscriptionState> = _state.asStateFlow()
 
     private var deviceId = ""
+
+    /**
+     * Взводится в [signedIn] и гасится после первой успешной загрузки подписки:
+     * именно в этот момент приложение выбирает «Автопилот» и включается само.
+     */
+    private var autoConnectAfterLogin = false
 
     init {
         // A 401 from the panel means the cookie expired: show the login screen
@@ -76,12 +100,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signedIn() {
         _signedIn.value = true
+        // Первый вход в сессии: после загрузки подписки включимся автоматически.
+        autoConnectAfterLogin = true
     }
 
     fun logout() {
         Api.logout()
+        autoConnectAfterLogin = false
         _signedIn.value = false
         _state.value = SubscriptionState()
+    }
+
+    /** Экран забрал запрос «включись сам» — второй раз он не сработает. */
+    fun consumeAutoConnect() {
+        _state.update { if (it.autoConnect) it.copy(autoConnect = false) else it }
     }
 
     fun select(name: String) {
@@ -136,12 +168,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val fresh = str(R.string.home_subscription_updated)
+            // Автозапуск после входа: подписка только что загрузилась — выбираем
+            // «Автопилот» (если такого узла в подписке нет — первый сервер) и
+            // просим экран включиться. Пока данные грузились, кнопка стояла
+            // выключенной и без орла: подключаться было нечем.
+            val autoNow = autoConnectAfterLogin && !TunnelState.running.value
+            autoConnectAfterLogin = false
             _state.update {
+                val list = result.nodes?.servers ?: it.servers
+                val picked = when {
+                    autoNow -> pickAutoServer(list.map { node -> node.name })
+                    else -> it.selected.ifBlank { list.firstOrNull()?.name.orEmpty() }
+                }
                 it.copy(
                     plan = result.plan,
                     raw = result.nodes?.raw ?: it.raw,
-                    servers = result.nodes?.servers ?: it.servers,
-                    selected = it.selected.ifBlank { result.nodes?.servers?.firstOrNull()?.name.orEmpty() },
+                    servers = list,
+                    selected = picked,
+                    autoConnect = autoNow && picked.isNotBlank(),
                     loading = false,
                     error = null,
                     notice = if (ping) it.notice else fresh,

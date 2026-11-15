@@ -101,6 +101,12 @@ internal data class Palette(
     val pingMid: Color,
     val pingSlow: Color,
     val pingNone: Color,
+    /**
+     * Верхняя точка градиента названия локации — «самый светлый» оттенок, до
+     * которого доходит перелив в пик свечения орла. Первый стоп — [cyan], то
+     * есть тот же цвет, что у надписи «WINGER»: название не выпадает из палитры.
+     */
+    val locPeak: Color,
     val isLight: Boolean,
 )
 
@@ -112,6 +118,7 @@ private val DarkPalette = Palette(
     text = Color(0xFFE8EEF6), caption = Color(0xFF94A3B8), cardLine = Color(0x14FFFFFF),
     pingFast = Color(0xFF7EE0B0), pingMid = Color(0xFFF0C14B),
     pingSlow = Color(0xFFF07171), pingNone = Color(0xFF7C8A9B),
+    locPeak = Color(0xFFE9FDFF),
     isLight = false,
 )
 
@@ -125,6 +132,7 @@ private val MidPalette = Palette(
     text = Color(0xFFF7FBFF), caption = Color(0xFFE1ECF7), cardLine = Color(0x21FFFFFF),
     pingFast = Color(0xFF7EE0B0), pingMid = Color(0xFFF0C14B),
     pingSlow = Color(0xFFF07171), pingNone = Color(0xFF9AA9BB),
+    locPeak = Color(0xFFF4FEFF),
     isLight = false,
 )
 
@@ -136,6 +144,7 @@ private val LightPalette = Palette(
     text = Color(0xFF0B1220), caption = Color(0xFF2E4C63), cardLine = Color(0x1A0F172A),
     pingFast = Color(0xFF0E8A4F), pingMid = Color(0xFFB26A00),
     pingSlow = Color(0xFFC62828), pingNone = Color(0xFF6B7686),
+    locPeak = Color(0xFF0F86A2),
     isLight = true,
 )
 

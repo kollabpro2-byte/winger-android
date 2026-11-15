@@ -244,14 +244,16 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
     val border = lerp(Color(0x59FFFFFF), Cyan.copy(alpha = .9f), lit)
     val borderWidth = 3f + 1.5f * lit
     // Ореол «дышит» в такт с градиентом названия: 3.7 с, пик на половине цикла.
+    // Амплитуда глубже, чем раньше (0.44…1 и 0.92…1.08): свечение должно читаться
+    // сразу, не приглядываясь.
     val breath = rememberInfiniteTransition(label = "breath")
     val breathAlpha by breath.animateFloat(
-        0.5f, 1f,
+        0.44f, 1f,
         infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "breathAlpha",
     )
     val breathScale by breath.animateFloat(
-        0.94f, 1.07f,
+        0.92f, 1.08f,
         infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "breathScale",
     )
@@ -287,8 +289,14 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                         scaleY = breathScale
                     }
                     .background(
+                        // Альфы 0.52 / 0.20 и радиус до 74 %: ореол ярче, чем раньше
+                        // (было 0.36 / 0.12) — свечение видно сразу в пике такта.
                         Brush.radialGradient(
-                            listOf(Color(0x5C22D3EE), Color(0x1F22D3EE), Color(0x0022D3EE))
+                            *arrayOf(
+                                0f to Color(0x8522D3EE),
+                                0.44f to Color(0x3322D3EE),
+                                0.74f to Color(0x0022D3EE),
+                            )
                         )
                     )
             )
@@ -468,20 +476,30 @@ private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean
         BoxWithConstraints(Modifier.weight(1f)) {
             val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 9.sp)
             if (hasChoice) {
-                // Градиент по буквам: два стопа сдвигаются анимацией, поэтому
-                // цвет «переливается» по названию.
-                val colors = if (AppTheme.p.isLight)
-                    listOf(Color(0xFF0A9C99), Color(0xFF1D5CF5), Color(0xFFC81ED6), Color(0xFF1D5CF5))
-                else
-                    listOf(Color(0xFF3BFFE4), Color(0xFF4C93FF), Color(0xFFE85CFF), Color(0xFF4C93FF))
+                // Голубой градиент по буквам. Первый стоп — Cyan, то есть ровно
+                // цвет надписи «WINGER» (в каждой теме свой), последний — locPeak.
+                // «Окно» градиента в 2.5 раза шире текста, поэтому сдвиг даёт
+                // перелив, а самый светлый участок приходится на середину такта —
+                // ровно на пик свечения орла (оба идут 3.7 с).
+                val p = AppTheme.p
+                val peak = p.locPeak
+                val colors = arrayOf(
+                    0.00f to p.cyan,
+                    0.25f to lerp(p.cyan, peak, 0.45f),
+                    0.55f to lerp(p.cyan, peak, 0.80f),
+                    0.80f to peak,
+                    1.00f to peak,
+                )
+                val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
                 val animated = if (on) shift else 0f
+                val x = -animated * widthPx * 1.5f
                 Text(
                     place,
                     style = TextStyle(
                         brush = Brush.linearGradient(
-                            colors = colors,
-                            start = Offset(animated * 260f, 0f),
-                            end = Offset(animated * 260f + 220f, 0f),
+                            *colors,
+                            start = Offset(x, 0f),
+                            end = Offset(x + widthPx * 2.5f, 0f),
                         ),
                         fontSize = nameSize,
                         fontWeight = FontWeight.Bold,

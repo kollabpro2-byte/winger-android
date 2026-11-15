@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -92,6 +93,26 @@ fun HomeScreen(
             delay(60 * 60 * 1000L)
             vm.refresh(ping = false)
         }
+    }
+
+    // Автозапуск после входа (v87): подписка загрузилась, «Автопилот» выбран —
+    // включаемся. Небольшая пауза, чтобы пользователь увидел, как кнопка
+    // «оживает»: сначала выключенный круг без орла, потом орёл опускается и
+    // ободок загорается. Флаг одноразовый: ручное выключение больше не
+    // перезапустит туннель.
+    LaunchedEffect(st.autoConnect) {
+        if (!st.autoConnect) return@LaunchedEffect
+        val alreadyOn = on || pro.wingerapp.vpn.Store.running(ctx)
+        val config = if (alreadyOn) null else vm.config()
+        if (!alreadyOn && config != null) {
+            // Пауза: пользователь успевает увидеть выключенную кнопку без орла,
+            // а затем орёл опускается и ободок загорается.
+            delay(450)
+            connect(config)
+        }
+        // Гасим флаг последним: его изменение перезапустит эффект, и если бы мы
+        // сделали это раньше, корутина отменилась бы до вызова connect().
+        vm.consumeAutoConnect()
     }
 
     // Интервал счётчиков трафика читаем при каждом входе на главную: если
