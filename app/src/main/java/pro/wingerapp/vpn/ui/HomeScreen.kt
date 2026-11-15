@@ -63,12 +63,25 @@ fun HomeScreen(
 
     LaunchedEffect(hwid) { vm.start(hwid) }
 
+    // Когда включается или выключается туннель, система меняет «сеть по
+    // умолчанию» — и коллбек ниже срабатывает. Пинговать в этот момент
+    // бессмысленно: маршрут только что поменялся, половина серверов не ответит
+    // вовремя, список на секунду обнуляется. Поэтому запоминаем время
+    // последнего переключения и в такие окна пинг не запускаем.
+    val lastTunnelAt = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    LaunchedEffect(on) { lastTunnelAt.set(System.currentTimeMillis()) }
+
     // A new network means a new route: re-probe latency so the list does not keep
     // the numbers measured on the previous Wi-Fi.
     DisposableEffect(Unit) {
         val cm = ctx.getSystemService(ConnectivityManager::class.java)
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { vm.refresh(ping = true) }
+            override fun onAvailable(network: Network) {
+                // 6 секунд — заведомо больше, чем занимает подъём/снятие tun
+                // и пересборка маршрутов.
+                if (System.currentTimeMillis() - lastTunnelAt.get() < 6000L) return
+                vm.refresh(ping = true)
+            }
         }
         runCatching { cm.registerDefaultNetworkCallback(cb) }
         onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
