@@ -232,10 +232,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
         if (on) tween(450) else tween(1200, delayMillis = 1600),
         label = "hint",
     )
-    // Ободок: в покое он виден как тонкая «каря» (1.5 dp, 25% белого), при
-    // включении разгорается до 3.5 dp циановым — «пожирнее».
-    val border = lerp(Color(0x40FFFFFF), Cyan.copy(alpha = .85f), lit)
-    val borderWidth = 1.5f + 2f * lit
+    // Ободок толстый в обоих состояниях: в покое он виден как плотная «каря»
+    // (3 dp, 35% белого), при включении разгорается циановым и чуть толстеет.
+    val border = lerp(Color(0x59FFFFFF), Cyan.copy(alpha = .9f), lit)
+    val borderWidth = 3f + 1.5f * lit
     // Ореол: только лёгкая подсветка внутри круга, без «прожектора» —
     // сильно горящий ореол вокруг орла не нужен.
     val glow by animateFloatAsState(if (on) 0.45f else 0f, tween(2400), label = "glow")
@@ -257,7 +257,8 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                     )
                 )
                 .border(borderWidth.dp, border, CircleShape)
-                .clickable { onToggle() },
+                // Подпись ушла из визуала, но осталась для скринридера.
+                .clickable(onClickLabel = hint) { onToggle() },
             contentAlignment = Alignment.Center
         ) {
             // Внутреннее свечение — только при включении и совсем слабое.
@@ -276,12 +277,15 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                 },
                 contentScale = ContentScale.Fit,
             )
-            // Подпись «включить»: почти прозрачная, гаснет сразу при нажатии.
-            Text(
-                hint.lowercase(),
-                color = Color(0xFF9FE6F7).copy(alpha = .22f * hintAlpha),
-                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 3.sp,
-            )
+            // Выключено — знак включения вместо слова: он читается с любого
+            // расстояния и не спорит с орлом. Гаснет вместе с появлением орла.
+            if (hintAlpha > .01f) {
+                PowerIcon(
+                    tint = (if (AppTheme.p.isLight) Color(0xFF33566E) else Color(0xFF9FE6F7))
+                        .copy(alpha = .55f * hintAlpha),
+                    size = 44.dp,
+                )
+            }
         }
     }
 }
@@ -719,6 +723,37 @@ private fun RefreshIcon(tint: Color, size: Dp) {
         val a2 = rad - Math.PI / 2
         drawLine(tint, Offset(ex, ey), Offset(ex - tip * cos(a1).toFloat(), ey - tip * sin(a1).toFloat()), stroke, StrokeCap.Round)
         drawLine(tint, Offset(ex, ey), Offset(ex - tip * cos(a2).toFloat(), ey - tip * sin(a2).toFloat()), stroke, StrokeCap.Round)
+    }
+}
+
+/**
+ * Знак включения (⏻): дуга почти полного круга и вертикальная черта сверху.
+ * Рисуется на Canvas — эмодзи и шрифтовые глифы в кружке сидят неровно.
+ */
+@Composable
+private fun PowerIcon(tint: Color, size: Dp) {
+    androidx.compose.foundation.Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * .10f
+        val r = w * .30f
+        val cx = w / 2f
+        // Дуга с разрывом сверху — там проходит вертикальная черта.
+        drawArc(
+            color = tint,
+            startAngle = -60f,
+            sweepAngle = 300f,
+            useCenter = false,
+            topLeft = Offset(cx - r, h / 2f - r + h * .04f),
+            size = Size(r * 2f, r * 2f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawLine(
+            tint,
+            Offset(cx, h / 2f - r * 1.25f),
+            Offset(cx, h / 2f - r * .1f),
+            stroke, StrokeCap.Round,
+        )
     }
 }
 
