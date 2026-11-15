@@ -15,10 +15,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.ui.HomeScreen
 import pro.wingerapp.vpn.ui.LoginScreen
@@ -85,7 +88,20 @@ class MainActivity : ComponentActivity() {
             // Системные полосы подстраиваются под тему: в светлой нужны тёмные
             // иконки и светлый фон, иначе часы и значки вверху не видны.
             SideEffect { applySystemBars() }
-            AppRoot(vm, this, hwid(), ::connect, ::disconnect)
+            // Ограничиваем системный масштаб шрифта. На HyperOS по умолчанию
+            // часто стоит «L» (fontScale ≈ 1.15–1.3): все sp растут, сетка
+            // продления и названия серверов перестают помещаться, и интерфейс
+            // выглядит иначе, чем в макете. Макет рассчитан на 1.0, поэтому
+            // допускаем небольшой запас, но не больше.
+            val base = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(
+                    density = base.density,
+                    fontScale = base.fontScale.coerceIn(0.85f, 1.15f),
+                )
+            ) {
+                AppRoot(vm, this, hwid(), ::connect, ::disconnect)
+            }
         }
     }
 
@@ -127,12 +143,16 @@ fun AppRoot(
     // Registration and the subscription both go out with the device id, and the
     // login screen runs before the home screen ever starts loading.
     LaunchedEffect(hwid) { vm.attachDevice(hwid) }
-    if (!signedIn) {
-        LoginScreen(vm, ctx, hwid, disconnect) { vm.signedIn() }
-    } else {
-        HomeScreen(vm, hwid, connect, disconnect, onLogout = {
-            disconnect()
-            TunnelState.clearError()
-        })
+    // Inter вместо системного шрифта: настоящие веса и одинаковые метрики на
+    // любой прошивке (см. Fonts.kt). Оборачиваем весь интерфейс, включая вход.
+    pro.wingerapp.vpn.ui.WingerFonts {
+        if (!signedIn) {
+            LoginScreen(vm, ctx, hwid, disconnect) { vm.signedIn() }
+        } else {
+            HomeScreen(vm, hwid, connect, disconnect, onLogout = {
+                disconnect()
+                TunnelState.clearError()
+            })
+        }
     }
 }

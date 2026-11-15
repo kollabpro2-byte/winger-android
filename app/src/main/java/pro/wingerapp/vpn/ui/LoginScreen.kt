@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -69,9 +70,10 @@ fun LoginScreen(
 
     Box(Modifier.fillMaxSize().background(BgBrush)) {
         Image(
-            painterResource(R.drawable.eagle), "Winger",
-            Modifier.align(Alignment.TopEnd).padding(16.dp).width(42.dp).height(32.dp),
-            contentScale = ContentScale.FillBounds
+            bitmap = rememberEagle(), contentDescription = "Winger",
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).width(42.dp).height(32.dp),
+            contentScale = ContentScale.Fit,
+            filterQuality = FilterQuality.High,
         )
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
             Text(
@@ -79,6 +81,7 @@ fun LoginScreen(
                 fontSize = 40.sp,
                 fontWeight = FontWeight.Bold,
                 style = TextStyle(
+                    fontFamily = WingerSans,
                     brush = Brush.linearGradient(
                         if (AppTheme.p.isLight)
                             // На светлом фоне белый в середине градиента исчезает.

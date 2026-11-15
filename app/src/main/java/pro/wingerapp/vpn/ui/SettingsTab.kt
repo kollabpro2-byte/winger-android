@@ -360,7 +360,7 @@ private fun fitLabelSize(text: String, available: Dp, max: TextUnit, min: TextUn
         while (size.value > min.value) {
             val width = measurer.measure(
                 text = androidx.compose.ui.text.AnnotatedString(text),
-                style = androidx.compose.ui.text.TextStyle(fontSize = size),
+                style = androidx.compose.ui.text.TextStyle(fontFamily = WingerSans, fontSize = size),
             ).size.width
             if (with(density) { width.toDp() } <= available) break
             size = (size.value - 0.5f).sp

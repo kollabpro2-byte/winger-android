@@ -81,14 +81,42 @@ internal fun SubLoading() {
     }
     Text(rememberStrings()[R.string.sub_loading], color = Color(0xFFC5D7E6), modifier = Modifier.fillMaxWidth().padding(top = 14.dp), textAlign = TextAlign.Center)
 }
+/**
+ * Орёл как растр в исходном разрешении: 300×230, без масштабирования под
+ * плотность экрана (`inScaled = false`).
+ *
+ * Зачем вручную: у `Image(painter = …)` нет параметра качества фильтрации, а
+ * исходник на телефоне уменьшается в 3–5 раз. На дефолтном билинейном фильтре
+ * контуры «плывут» — именно это и читается как «графика не такая качественная».
+ */
+@Composable
+internal fun rememberEagle(): ImageBitmap {
+    val res = LocalContext.current.resources
+    return remember(res) {
+        val opts = BitmapFactory.Options().apply { inScaled = false }
+        BitmapFactory.decodeResource(res, R.drawable.eagle, opts).asImageBitmap()
+    }
+}
+
 @Composable
 internal fun BirdMark() {
-    val painter = painterResource(R.drawable.eagle)
+    val eagle = rememberEagle()
     Box(Modifier.width(22.dp).height(17.dp)) {
-        listOf(-0.4f to 0f, 0.4f to 0f, 0f to -0.4f, 0f to 0.4f).forEach { (x, y) ->
-            Image(painter, null, Modifier.fillMaxSize().offset(x.dp, y.dp), contentScale = ContentScale.FillBounds, colorFilter = ColorFilter.tint(Color.Black, BlendMode.SrcIn))
-        }
-        Image(painter, rememberStrings()[R.string.comp_bird], Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        // Тень одним смещённым слоем вместо четырёх чёрных копий по кругу:
+        // такая «обводка» давала грязный контур и выглядела дёшево.
+        Image(
+            bitmap = eagle, contentDescription = null,
+            modifier = Modifier.fillMaxSize().offset(y = 0.7.dp),
+            contentScale = ContentScale.Fit,
+            colorFilter = ColorFilter.tint(Color.Black.copy(.35f), BlendMode.SrcIn),
+            filterQuality = FilterQuality.High,
+        )
+        Image(
+            bitmap = eagle, contentDescription = rememberStrings()[R.string.comp_bird],
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit,
+            filterQuality = FilterQuality.High,
+        )
     }
 }
 @Composable

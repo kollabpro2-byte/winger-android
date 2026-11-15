@@ -1,6 +1,7 @@
 package pro.wingerapp.vpn.ui
 
 import android.content.Context
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -25,6 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -33,6 +35,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -281,6 +284,8 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             // Свечение из центра: мягкое пятно, «дышит» при включении.
+            // На API 31+ дополнительно размывается по-настоящему: градиент с
+            // альфой на OLED даёт ступеньки (бандинг), размытие их убирает.
             Box(
                 Modifier.matchParentSize().padding(6.dp)
                     .graphicsLayer {
@@ -288,6 +293,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                         scaleX = breathScale
                         scaleY = breathScale
                     }
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            Modifier.blur(12.dp) else Modifier
+                    )
                     .background(
                         // Альфы 0.52 / 0.20 и радиус до 74 %: ореол ярче, чем раньше
                         // (было 0.36 / 0.12) — свечение видно сразу в пике такта.
@@ -300,14 +309,18 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                         )
                     )
             )
-            // Орёл: при включении опускается сверху вниз к центру (36.5 dp).
+            // Орёл: при включении опускается сверху вниз к центру (36 dp).
+            // Целое число dp и FilterQuality.High: исходник 300×230 при
+            // плотности 2.75 уменьшается втрое, и на дефолтном (билинейном)
+            // фильтре контуры «плывут» — с высоким качеством остаются резкими.
             Image(
-                painterResource(R.drawable.eagle), null,
-                Modifier.size(36.5.dp).graphicsLayer {
+                bitmap = rememberEagle(), contentDescription = null,
+                modifier = Modifier.size(36.dp).graphicsLayer {
                     alpha = lit
                     translationY = eagleDrop * density
                 },
                 contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.High,
             )
             // Выключено — знак включения вместо слова: он читается с любого
             // расстояния и не спорит с орлом. Гаснет вместе с появлением орла.
@@ -400,10 +413,10 @@ private fun fitValueSize(number: String, suffix: String?, available: Dp, max: Te
     return remember(number, suffix, available, max, min) {
         var size = max
         while (size.value > min.value) {
-            val style = TextStyle(fontSize = size, fontWeight = FontWeight.SemiBold)
+            val style = TextStyle(fontFamily = WingerSans, fontSize = size, fontWeight = FontWeight.SemiBold)
             var width = measurer.measure(AnnotatedString(number), style).size.width
             if (suffix != null) {
-                val tailStyle = TextStyle(fontSize = (size.value * .72f).sp, fontWeight = FontWeight.SemiBold)
+                val tailStyle = TextStyle(fontFamily = WingerSans, fontSize = (size.value * .72f).sp, fontWeight = FontWeight.SemiBold)
                 width += measurer.measure(AnnotatedString(suffix), tailStyle).size.width
                 width += with(density) { 4.dp.toPx() }.toInt()
             }
@@ -467,10 +480,7 @@ private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean
 
     Row(
         Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp)
-            .drawBehind {
-                val y = size.height - 1.dp.toPx() / 2f
-                drawLine(Line, Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
-            },
+            .drawBehind { hairlineBottom(Line) },
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
@@ -496,6 +506,7 @@ private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean
                 Text(
                     place,
                     style = TextStyle(
+                        fontFamily = WingerSans,
                         brush = Brush.linearGradient(
                             *colors,
                             start = Offset(x, 0f),
@@ -770,7 +781,7 @@ private fun fitNameSize(text: String, available: Dp, max: TextUnit, min: TextUni
         while (size.value > min.value) {
             val width = measurer.measure(
                 text = AnnotatedString(text),
-                style = TextStyle(fontSize = size, fontWeight = FontWeight.Bold),
+                style = TextStyle(fontFamily = WingerSans, fontSize = size, fontWeight = FontWeight.Bold),
             ).size.width
             if (with(density) { width.toDp() } <= available) break
             size = (size.value - 0.5f).sp
@@ -859,7 +870,7 @@ private fun fitNoteSize(text: String, available: Dp, max: TextUnit, min: TextUni
         while (size.value > min.value) {
             val width = measurer.measure(
                 text = AnnotatedString(text),
-                style = TextStyle(fontSize = size, fontWeight = FontWeight.SemiBold, letterSpacing = .25.sp),
+                style = TextStyle(fontFamily = WingerSans, fontSize = size, fontWeight = FontWeight.SemiBold, letterSpacing = .25.sp),
             ).size.width
             if (with(density) { width.toDp() } <= available) break
             size = (size.value - 0.5f).sp
