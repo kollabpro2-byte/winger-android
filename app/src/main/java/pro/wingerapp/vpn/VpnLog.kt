@@ -9,8 +9,12 @@ import java.util.Locale
 object VpnLog {
     private lateinit var file: File
 
-    /** Сколько живёт лог: раз в час он очищается целиком. */
-    private const val ROTATE_MS = 60L * 60L * 1000L
+    /** Сколько живёт лог по умолчанию: 30 минут (настраивается в настройках). */
+    private const val DEFAULT_PERIOD_MS = 30L * 60L * 1000L
+
+    /** Текущий период ротации; меняется из настроек. */
+    @Volatile
+    private var periodMs = DEFAULT_PERIOD_MS
 
     /** Предел размера между ротациями. */
     private const val MAX_BYTES = 64_000L
@@ -19,6 +23,12 @@ object VpnLog {
     private const val KEEP_LINES = 200
 
     private var lastRotate = System.currentTimeMillis()
+
+    /** Период очистки журнала в минутах: 30 по умолчанию, максимум 120. */
+    @Synchronized
+    fun setPeriodMinutes(minutes: Int) {
+        periodMs = minutes.coerceIn(5, 120) * 60_000L
+    }
 
     @Synchronized
     fun init(ctx: Context) {
@@ -62,7 +72,7 @@ object VpnLog {
 
     private fun rotateIfDueLocked() {
         val now = System.currentTimeMillis()
-        if (now - lastRotate < ROTATE_MS) return
+        if (now - lastRotate < periodMs) return
         lastRotate = now
         file.writeText("")
     }

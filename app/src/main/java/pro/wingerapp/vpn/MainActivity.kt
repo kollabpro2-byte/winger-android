@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import pro.wingerapp.vpn.net.Api
@@ -75,7 +76,31 @@ class MainActivity : ComponentActivity() {
         VpnLog.add("app start")
         pro.wingerapp.vpn.net.Api.init(this)
         TunnelState.sync(this)
-        setContent { AppRoot(vm, this, hwid(), ::connect, ::disconnect) }
+        // Тема из настроек до первой композиции: иначе экран на мгновение
+        // отрисуется в средней теме и «перескочит».
+        pro.wingerapp.vpn.ui.AppTheme.mode =
+            pro.wingerapp.vpn.ui.AppTheme.fromStored(Store.themeMode(this))
+        VpnLog.setPeriodMinutes(Store.logClearMinutes(this))
+        setContent {
+            // Системные полосы подстраиваются под тему: в светлой нужны тёмные
+            // иконки и светлый фон, иначе часы и значки вверху не видны.
+            SideEffect { applySystemBars() }
+            AppRoot(vm, this, hwid(), ::connect, ::disconnect)
+        }
+    }
+
+    /** Статус-бар и навигация в цвет темы (Compose сам их не перекрашивает). */
+    private fun applySystemBars() {
+        val palette = pro.wingerapp.vpn.ui.AppTheme.p
+        val bg = if (palette.isLight) 0xFFCBD2DB.toInt() else 0xFF040D1A.toInt()
+        @Suppress("DEPRECATION")
+        run {
+            window.statusBarColor = bg
+            window.navigationBarColor = bg
+        }
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        controller.isAppearanceLightStatusBars = palette.isLight
+        controller.isAppearanceLightNavigationBars = palette.isLight
     }
 
     /**

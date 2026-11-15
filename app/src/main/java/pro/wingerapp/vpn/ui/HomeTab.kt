@@ -150,7 +150,7 @@ internal fun HomeTab(
 
         val pingMs = pings[place]
         // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
-        Text(s[R.string.home_location], color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 14.dp))
+        Text(s[R.string.home_location], color = Caption, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
         LocationCard(
             place = place.ifBlank { s[R.string.home_select_server] },
             ping = when {
@@ -183,7 +183,7 @@ internal fun HomeTab(
                 )
             } else {
                 Text(
-                    s[group.titleRes], color = Muted, fontSize = (11f * listScale).sp,
+                    s[group.titleRes], color = Caption, fontSize = (11f * listScale).sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = (10f * listScale).dp, bottom = (4f * listScale).dp)
                 )
             }
@@ -243,7 +243,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                 }
                 .background(
                     Brush.radialGradient(
-                        listOf(Color(0xFF0E1B2C), Color(0xFF0A1220), Color(0xFF070C14))
+                        if (AppTheme.p.isLight)
+                            listOf(Color(0xFFFFFFFF), Color(0xFFF1F4F9), Color(0xFFE1E7EF))
+                        else
+                            listOf(Color(0xFF0E1B2C), Color(0xFF0A1220), Color(0xFF070C14))
                     )
                 )
                 .border(1.5.dp, border, CircleShape)
@@ -284,21 +287,25 @@ private fun StatsRow(days: String, devices: String, traffic: String) {
     val s = rememberStrings()
     Row(
         Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(18.dp))
-            .background(Color(0x08FFFFFF)).border(1.dp, Color(0x0DFFFFFF), RoundedCornerShape(18.dp))
+            .background(Elev).border(1.dp, CardLine, RoundedCornerShape(18.dp))
             .padding(vertical = 11.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Stat(Modifier.weight(1f), StatKind.Clock, Color(0xFF22D3EE), Color(0x1F22D3EE), s[R.string.home_days_left], days)
+        // В светлой теме неоновые сиреневый и циан на белой карточке бледнеют.
+        val c1 = if (AppTheme.p.isLight) Color(0xFF0E7490) else Color(0xFF22D3EE)
+        val c2 = if (AppTheme.p.isLight) Color(0xFF7C3AED) else Color(0xFFC084FC)
+        val c3 = if (AppTheme.p.isLight) Color(0xFF2563EB) else Color(0xFF7FB0FF)
+        Stat(Modifier.weight(1f), StatKind.Clock, c1, c1.copy(alpha = .12f), s[R.string.home_days_left], days)
         VDivider()
-        Stat(Modifier.weight(1f), StatKind.Phone, Color(0xFFC084FC), Color(0x24C084FC), s[R.string.home_devices_label], devices)
+        Stat(Modifier.weight(1f), StatKind.Phone, c2, c2.copy(alpha = .14f), s[R.string.home_devices_label], devices)
         VDivider()
-        Stat(Modifier.weight(1f), StatKind.Traffic, Color(0xFF7FB0FF), Color(0x247FB0FF), s[R.string.home_traffic_label], traffic, unit = s[R.string.fmt_gb_unit])
+        Stat(Modifier.weight(1f), StatKind.Traffic, c3, c3.copy(alpha = .14f), s[R.string.home_traffic_label], traffic, unit = s[R.string.fmt_gb_unit])
     }
 }
 
 @Composable
 private fun VDivider() {
-    Box(Modifier.width(1.dp).height(26.dp).background(Color(0x12FFFFFF)))
+    Box(Modifier.width(1.dp).height(26.dp).background(Line))
 }
 
 @Composable
@@ -308,16 +315,16 @@ private fun Stat(mod: Modifier, kind: StatKind, tint: Color, bg: Color, label: S
             StatIcon(kind, tint)
         }
         Column(Modifier.padding(start = 9.dp)) {
-            Text(label, color = Color(0xFF8794A6), fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1)
+            Text(label, color = Muted, fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1)
             Row {
                 Text(
-                    value, color = Color(0xFFEDF3FA), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                    value, color = TextMain, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
                 )
                 // Единица измерения — мелкой подписью рядом: «197,0» + «ГБ»
                 // укладывается там, где «197,0 ГБ» пришлось бы обрезать.
                 if (unit != null) Text(
-                    unit, color = Color(0xFF8794A6), fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
+                    unit, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, softWrap = false,
                     modifier = Modifier.padding(start = 2.dp, top = 3.dp)
                 )
@@ -366,12 +373,13 @@ private fun StatIcon(kind: StatKind, tint: Color) {
  */
 @Composable
 private fun LocationCard(place: String, ping: String?, live: Boolean) {
+    // В светлой теме полупрозрачная тонировка на сером фоне почти не видна —
+    // подкладываем светлую карточку, а тонировку оставляем акцентом.
     Row(
         Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
-            .background(
-                Brush.linearGradient(listOf(Color(0x338B5CF6), Color(0x223B82F6), Color(0x2222D3EE)))
-            )
-            .border(1.dp, Purple.copy(alpha = .32f), RoundedCornerShape(18.dp))
+            .background(if (AppTheme.p.isLight) Elev else Color.Transparent)
+            .background(Brush.linearGradient(listOf(Color(0x338B5CF6), Color(0x223B82F6), Color(0x2222D3EE))))
+            .border(1.dp, if (AppTheme.p.isLight) CardLine else Purple.copy(alpha = .32f), RoundedCornerShape(18.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -380,7 +388,7 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
             // влезет целиком, вместо обрезки многоточием.
             val nameSize = fitNameSize(place, maxWidth, 13.sp, 7.sp)
             Text(
-                place, color = Color.White, fontSize = nameSize, fontWeight = FontWeight.Bold,
+                place, color = TextMain, fontSize = nameSize, fontWeight = FontWeight.Bold,
                 maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
             )
         }
@@ -391,10 +399,10 @@ private fun LocationCard(place: String, ping: String?, live: Boolean) {
         ) {
             Box(
                 Modifier.size(7.dp).clip(CircleShape)
-                    .background(if (live) Color(0xFF3DFF7A) else Color(0xFF5A6A7E))
+                    .background(if (live) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A)) else (if (AppTheme.p.isLight) Color(0xFF8296AA) else Color(0xFF5A6A7E)))
             )
             Text(
-                ping ?: "—", color = Color(0xFF9FE6F7), fontSize = 10.5.sp,
+                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7), fontSize = 10.5.sp,
                 modifier = Modifier.padding(start = 6.dp)
             )
         }
@@ -456,9 +464,9 @@ private fun TrafficSlot(on: Boolean, intervalSec: Int) {
             Modifier.fillMaxWidth().alpha(alpha),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("↑ $up", color = Color(0xFF7EE0B0), fontSize = 13.sp)
+            Text("↑ $up", color = if (AppTheme.p.isLight) Color(0xFF0F9D6B) else Color(0xFF7EE0B0), fontSize = 13.sp)
             Text(elapsed, color = Muted, fontSize = 13.sp)
-            Text("↓ $down", color = Color(0xFF9ECBFF), fontSize = 13.sp)
+            Text("↓ $down", color = if (AppTheme.p.isLight) Color(0xFF2563EB) else Color(0xFF9ECBFF), fontSize = 13.sp)
         }
     }
 }
@@ -477,7 +485,7 @@ private fun ListHeaderRow(
         Modifier.fillMaxWidth().padding(top = (12f * scale).dp, bottom = (12f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, color = Muted, fontSize = (11f * scale).sp)
+        Text(title, color = Caption, fontSize = (11f * scale).sp, fontWeight = FontWeight.Bold)
         Text(
             noticeText, color = NoticeCyan.copy(alpha = noticeAlpha),
             fontSize = (11f * scale).sp, fontWeight = FontWeight.SemiBold,
@@ -486,9 +494,11 @@ private fun ListHeaderRow(
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
         )
         // Вспышка кнопки обновления: два удара и долгое затухание.
-        val bg = lerp(Color.White.copy(alpha = .06f), NoticeCyan.copy(alpha = .92f), flash)
-        val ring = lerp(Color.White.copy(alpha = .10f), NoticeCyan, flash)
-        val ink = lerp(Color(0xFFC9D7E4), Color(0xFF052A34), flash)
+        val baseBg = if (AppTheme.p.isLight) Color(0xFFF4F7FA) else Color.White.copy(alpha = .06f)
+        val baseRing = if (AppTheme.p.isLight) Color(0xFF7E8B9C) else Color.White.copy(alpha = .10f)
+        val bg = lerp(baseBg, NoticeCyan.copy(alpha = .92f), flash)
+        val ring = lerp(baseRing, NoticeCyan, flash)
+        val ink = lerp(if (AppTheme.p.isLight) Color(0xFF0E7490) else Color(0xFFC9D7E4), Color(0xFF052A34), flash)
         Box(
             Modifier.size(34.dp).clip(CircleShape).background(bg)
                 .border(1.dp, ring, CircleShape).clickable { onRefresh() },
@@ -557,8 +567,8 @@ private fun ServerRow(
         )
         Column(Modifier.weight(1f).padding(start = (4f * scale).dp)) {
             Text(
-                node.name, color = if (selected) Color.White else Color(0xFFE8EEF6),
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                node.name, color = if (selected) (if (AppTheme.p.isLight) Color(0xFF3B0764) else Color.White) else TextMain,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 fontSize = (13f * scale).sp, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             Text(proto, color = Muted, fontSize = (10f * scale).sp, maxLines = 1)
@@ -566,11 +576,14 @@ private fun ServerRow(
         when {
             waiting -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
             pingKnown -> {
+                // Палитра пинга своя для каждой темы: мятный и жёлтый на сером
+                // и белом фоне не читаются.
+                val p = AppTheme.p
                 val c = when {
-                    ms == null || ms == -1 -> Color(0xFF7C8A9B)
-                    ms < 120 -> Color(0xFF7EE0B0)
-                    ms < 200 -> Color(0xFFF0C14B)
-                    else -> Color(0xFFF07171)
+                    ms == null || ms == -1 -> p.pingNone
+                    ms < 120 -> p.pingFast
+                    ms < 200 -> p.pingMid
+                    else -> p.pingSlow
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(6.dp).clip(CircleShape).background(c))
@@ -580,7 +593,7 @@ private fun ServerRow(
                             ms == -1 -> unknownLabel
                             else -> ms.toString()
                         },
-                        color = c, fontSize = (11f * scale).sp,
+                        color = c, fontSize = (11f * scale).sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(start = 6.dp)
                     )
                 }

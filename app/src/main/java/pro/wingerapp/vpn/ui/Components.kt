@@ -50,8 +50,9 @@ fun Field(v: String, label: String, password: Boolean = false, on: (String) -> U
         v, on, label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         colors = TextFieldDefaults.colors(
-            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            focusedContainerColor = Elev, unfocusedContainerColor = Elev,
+            focusedTextColor = TextMain, unfocusedTextColor = TextMain,
+            focusedContainerColor = if (AppTheme.p.isLight) Color(0xFFF7F9FC) else Elev,
+            unfocusedContainerColor = if (AppTheme.p.isLight) Color(0xFFF7F9FC) else Elev,
             focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line
         )
     )
@@ -63,7 +64,7 @@ internal fun Section(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 internal fun Seg(label: String, on: Boolean, modifier: Modifier, click: () -> Unit) {
     Box(modifier.padding(horizontal = 2.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.28f) else Elev).clickable { click() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-        Text(label, color = Color.White, fontSize = 12.sp)
+        Text(label, color = if (on) OnAccent else OnCard, fontSize = 12.sp)
     }
 }
 @Composable

@@ -106,14 +106,14 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
         } else {
         Section {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(s[R.string.acc_account], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
-                Text(c.login, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text(s[R.string.acc_account], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                Text(c.login, color = OnCard, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
         if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
             if (c.telegram == null) {
                 Section {
-                    Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    Text(s[R.string.acc_telegram], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(s[R.string.acc_telegram_hint], color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                     Box(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(24.dp)).background(Purple).clickable { bindTelegram() }.padding(13.dp), contentAlignment = Alignment.Center) {
                         Text(s[R.string.acc_telegram_bind], color = Color.White, fontWeight = FontWeight.SemiBold)
@@ -122,7 +122,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             } else {
                 Section {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_telegram], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                        Text(s[R.string.acc_telegram], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                         Text(c.telegram ?: s[R.string.acc_telegram_linked], color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Normal)
                     }
                 }
@@ -131,7 +131,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             if (c.offers.isNotEmpty()) {
                 val offer = c.offers.firstOrNull { it.days == picked } ?: c.offers.first()
                 Section {
-                    Text(if (c.subscriptionId.isBlank()) s[R.string.acc_payment] else s[R.string.acc_renewal], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    Text(if (c.subscriptionId.isBlank()) s[R.string.acc_payment] else s[R.string.acc_renewal], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     // Дни и цены живут в двух Row с одинаковыми weight(1f) и одинаковым
                     // числом ячеек — поэтому колонки стоят строго друг над другом. При
                     // 5+ вариантах шрифт уменьшается, иначе «1825» и «1 499» не влезают.
@@ -142,20 +142,20 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                         else -> 9.sp
                     }
                     Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_days], color = Color(0xFF7C8A9B), fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
+                        Text(s[R.string.acc_days], color = Caption, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
                         c.offers.forEach { item ->
                             val on = item.days == picked
-                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
-                                Text("${item.days}", color = Color.White, fontSize = cellFont, maxLines = 1)
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else CardSoft).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                Text("${item.days}", color = if (on) OnAccent else OnCard, fontSize = cellFont, maxLines = 1)
                             }
                         }
                     }
                     Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(s[R.string.acc_price_sign], color = Color(0xFFA6B4C6), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
+                        Text(s[R.string.acc_price_sign], color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
                         c.offers.forEach { item ->
                             val on = item.days == picked
-                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else Color.White.copy(.03f)).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
-                                Text(item.price, color = Color.White, fontSize = cellFont, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            Box(Modifier.weight(1f).padding(horizontal = 3.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Purple.copy(.26f) else CardSoft).border(1.dp, if (on) Purple else Line, RoundedCornerShape(12.dp)).clickable { picked = item.days; choosing = false }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                Text(item.price, color = if (on) OnAccent else OnCard, fontSize = cellFont, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -168,14 +168,14 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                             }
                         }.padding(13.dp), contentAlignment = Alignment.Center) { Text(s[R.string.acc_renew], color = Color.White, fontWeight = FontWeight.SemiBold) }
                     } else {
-                        Text(s[R.string.acc_pay_method], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+                        Text(s[R.string.acc_pay_method], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
                         ways.forEachIndexed { index, way ->
                             val amount = offer.amount(way.gateway)
                             val selected = index == pickedWay
                             Row(
                                 Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 52.dp)
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(if (selected) Purple.copy(.14f) else Color(0xFF0A1424))
+                                    .background(if (selected) Purple.copy(.14f) else CardSoft)
                                     .border(1.dp, if (selected) Purple else Purple.copy(.28f), RoundedCornerShape(16.dp))
                                     .clickable { pickedWay = index }
                                     .padding(horizontal = 14.dp),
@@ -187,22 +187,22 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        way.title, color = Color.White, fontSize = 14.sp,
+                                        way.title, color = OnCard, fontSize = 14.sp,
                                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                     if (way.autopay) Text(
                                         s[R.string.pay_autopay_tag],
-                                        color = Color(0xFFC4B5FD), fontSize = 9.5.sp,
+                                        color = (if (AppTheme.p.isLight) Color(0xFF5B21B6) else Color(0xFFC4B5FD)), fontSize = 9.5.sp,
                                         modifier = Modifier.padding(start = 8.dp)
                                             .clip(RoundedCornerShape(20.dp)).background(Purple.copy(.18f))
                                             .padding(horizontal = 7.dp, vertical = 2.dp),
                                         maxLines = 1
                                     )
                                 }
-                                Text("$amount ₽", color = Color(0xFFA6B4C6), fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+                                Text("$amount ₽", color = Muted, fontSize = 12.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
                                 Box(
-                                    Modifier.padding(start = 10.dp).size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) Purple else Color.White.copy(.28f), CircleShape).background(if (selected) Purple else Color.Transparent)
+                                    Modifier.padding(start = 10.dp).size(18.dp).clip(CircleShape).border(1.5.dp, if (selected) Purple else Dim.copy(.7f), CircleShape).background(if (selected) Purple else Color.Transparent)
                                 )
                             }
                         }
@@ -228,7 +228,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             Section {
                 var devicesOpen by remember { mutableStateOf(true) }
                 Row(Modifier.fillMaxWidth().clickable { devicesOpen = !devicesOpen }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_devices], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    Text(s[R.string.acc_devices], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(if (devicesOpen) s[R.string.acc_collapse] else s[R.string.acc_expand], color = Cyan, fontSize = 12.sp)
                 }
                 if (devicesOpen) {
@@ -239,7 +239,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                     val mine = remember(c.devices, hwid) { c.devices.filter { it.hwid == hwid } }
                     val others = remember(c.devices, hwid) { c.devices.filter { it.hwid != hwid } }
                     if (mine.isNotEmpty()) {
-                        DeviceGroup(s[R.string.acc_devices_this], accent = Color(0xFF3DFF7A)) {
+                        DeviceGroup(s[R.string.acc_devices_this], accent = (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A))) {
                             mine.forEach { d -> DeviceRow(d, s[R.string.acc_device_active], s[R.string.acc_remove]) { confirm = d.hwid } }
                         }
                     }
@@ -252,7 +252,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             }
             Section {
                 Row(Modifier.fillMaxWidth().clickable { confirmLogout = true }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_session], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    Text(s[R.string.acc_session], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(
                         s[R.string.acc_logout],
                         color = Color(0xFFF87171),
@@ -266,7 +266,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             }
             Section {
                 Row(Modifier.fillMaxWidth().clickable { onSupport() }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(s[R.string.acc_support], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                    Text(s[R.string.acc_support], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(s[R.string.acc_support_open], color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Purple).padding(horizontal = 14.dp, vertical = 8.dp))
                 }
             }
@@ -284,12 +284,12 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                 Modifier.padding(24.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(s[R.string.acc_remove_title], color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(s[R.string.acc_remove_title], color = OnCard, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Text(target?.title ?: "", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
                 Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        s[R.string.acc_remove_no], color = Color.White,
-                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF1A2436))
+                        s[R.string.acc_remove_no], color = OnCard,
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(CardSoft)
                             .clickable { confirm = null }.padding(horizontal = 20.dp, vertical = 10.dp)
                     )
                     Text(
@@ -319,16 +319,16 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                 Modifier.padding(26.dp).clip(RoundedCornerShape(20.dp)).background(Elev).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(s[R.string.acc_logout_confirm], color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(s[R.string.acc_logout_confirm], color = OnCard, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Text(
                     s[R.string.acc_logout_hint], color = Muted, fontSize = 13.sp,
                     modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center
                 )
                 Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        s[R.string.acc_remove_no], color = Color.White, textAlign = TextAlign.Center,
+                        s[R.string.acc_remove_no], color = OnCard, textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFF1A2436)).clickable { confirmLogout = false }
+                            .background(CardSoft).clickable { confirmLogout = false }
                             .padding(vertical = 12.dp)
                     )
                     Text(
@@ -343,7 +343,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
         }
     }
     if (toast.isNotBlank()) {
-        Text(toast, color = Color.White, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF121C2E)).border(1.dp, Purple.copy(.75f), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 12.dp))
+        Text(toast, color = Color.White, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).clip(RoundedCornerShape(16.dp)).background(if (AppTheme.p.isLight) Color(0xFF243040) else Color(0xFF121C2E)).border(1.dp, Purple.copy(.75f), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 12.dp))
     }
     }
 }
@@ -390,9 +390,9 @@ internal fun SupportChat(ctx: Context, onClose: () -> Unit) {
         }
     }
     LaunchedEffect(thread?.lines?.size, images.size) { scroll.scrollTo(scroll.maxValue) }
-    Column(Modifier.fillMaxSize().background(Bg)) {
+    Column(Modifier.fillMaxSize().background(BgBrush)) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(s[R.string.chat_title], color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(s[R.string.chat_title], color = OnCard, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(s[R.string.chat_close], color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(Purple).clickable { onClose() }.padding(horizontal = 16.dp, vertical = 10.dp))
         }
         if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
@@ -404,22 +404,22 @@ internal fun SupportChat(ctx: Context, onClose: () -> Unit) {
                 Column(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
                     Text(line.author, color = Muted, fontSize = 11.sp)
                     if (line.text.isNotBlank()) {
-                        Text(line.text, color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp).widthIn(max = 280.dp).clip(RoundedCornerShape(16.dp)).background(if (mine) Purple.copy(.45f) else Elev).padding(12.dp))
+                        Text(line.text, color = if (mine) OnAccent else OnCard, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp).widthIn(max = 280.dp).clip(RoundedCornerShape(16.dp)).background(if (mine) Purple.copy(.45f) else Elev).padding(12.dp))
                     }
                     line.files.forEach { file ->
                         val bmp = images[file.id]
                         if (bmp != null) Image(bmp.asImageBitmap(), file.name, Modifier.padding(top = 6.dp).widthIn(max = 240.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.FillWidth)
-                        else Text(file.name, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(12.dp)).background(if (mine) Purple.copy(.45f) else Elev).padding(horizontal = 10.dp, vertical = 8.dp))
+                        else Text(file.name, color = OnCard, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(12.dp)).background(if (mine) Purple.copy(.45f) else Elev).padding(horizontal = 10.dp, vertical = 8.dp))
                     }
                 }
             }
             Spacer(Modifier.height(8.dp))
         }
-        Column(Modifier.fillMaxWidth().background(Color(0xFF06101C)).padding(12.dp)) {
+        Column(Modifier.fillMaxWidth().background(CardSoft).padding(12.dp)) {
             if (files.isNotEmpty()) Text(files.joinToString { it.name }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("📎", fontSize = 22.sp, modifier = Modifier.clickable { pick.launch(arrayOf("image/png", "image/jpeg", "image/webp", "application/pdf")) }.padding(6.dp))
-                OutlinedTextField(draft, { draft = it }, placeholder = { Text(s[R.string.chat_placeholder]) }, modifier = Modifier.weight(1f), colors = TextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedContainerColor = Elev, unfocusedContainerColor = Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
+                OutlinedTextField(draft, { draft = it }, placeholder = { Text(s[R.string.chat_placeholder]) }, modifier = Modifier.weight(1f), colors = TextFieldDefaults.colors(focusedTextColor = TextMain, unfocusedTextColor = TextMain, focusedContainerColor = if (AppTheme.p.isLight) Color(0xFFF7F9FC) else Elev, unfocusedContainerColor = if (AppTheme.p.isLight) Color(0xFFF7F9FC) else Elev, focusedIndicatorColor = Purple, unfocusedIndicatorColor = Line))
                 Text("➤", color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(start = 8.dp).clip(CircleShape).background(Purple).clickable(enabled = !sending) {
                     if (draft.isBlank() && files.isEmpty()) return@clickable
                     sending = true
@@ -468,7 +468,7 @@ internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
                     Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0x8C24124E)).padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (active) Color(0xFF3DFF7A) else Color(0xFFFF4D4D)))
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (active) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A)) else Color(0xFFFF4D4D)))
                     Text(if (active) s[R.string.sub_active] else s[R.string.sub_inactive], color = Color.White, fontSize = 10.sp, maxLines = 1, modifier = Modifier.padding(start = 6.dp))
                 }
             }
@@ -513,7 +513,7 @@ private fun DeviceRow(d: pro.wingerapp.vpn.net.HwDevice, seen: String, removeLab
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(d.title, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text(d.title, color = OnCard, fontSize = 14.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             if (seen.isNotBlank()) Text(seen, color = Muted, fontSize = 12.sp, maxLines = 1)
         }
         Text(

@@ -307,11 +307,14 @@ class WingerVpnService : VpnService() {
                 val traffic = runCatching { tunTraffic() }.getOrNull()
                 val counters = traffic?.let { " rx=${it.first} tx=${it.second}" }.orEmpty()
                 VpnLog.add("alive ${sec}s heap=$heap threads=${Thread.activeCount()}$counters")
-                // Логи не должны занимать память устройства: приложение чистится
-                // раз в час, лог ядра — тоже раз в час и вдобавок при 1.5 МБ.
+                // Логи не должны занимать память устройства. Период берём из
+                // настроек (по умолчанию 30 минут, максимум 2 часа) — раньше он
+                // был жёстко часовым.
+                val periodMs = Store.logClearMinutes(this@WingerVpnService) * 60_000L
+                VpnLog.setPeriodMinutes(Store.logClearMinutes(this@WingerVpnService))
                 VpnLog.rotateIfDue()
                 val nowMs = System.currentTimeMillis()
-                if (nowMs - lastCoreRotate >= 60L * 60L * 1000L) {
+                if (nowMs - lastCoreRotate >= periodMs) {
                     lastCoreRotate = nowMs
                     VpnLog.pruneCoreLog(coreLogFile, maxBytes = 0L)
                 } else {

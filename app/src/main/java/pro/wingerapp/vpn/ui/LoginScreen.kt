@@ -67,7 +67,7 @@ fun LoginScreen(
         return
     }
 
-    Box(Modifier.fillMaxSize().background(Bg)) {
+    Box(Modifier.fillMaxSize().background(BgBrush)) {
         Image(
             painterResource(R.drawable.eagle), "Winger",
             Modifier.align(Alignment.TopEnd).padding(16.dp).width(42.dp).height(32.dp),
@@ -78,7 +78,15 @@ fun LoginScreen(
                 "Winger",
                 fontSize = 40.sp,
                 fontWeight = FontWeight.Bold,
-                style = TextStyle(brush = Brush.linearGradient(listOf(Color(0xFF7EE7FF), Color.White, Color(0xFFD8B4FE))))
+                style = TextStyle(
+                    brush = Brush.linearGradient(
+                        if (AppTheme.p.isLight)
+                            // На светлом фоне белый в середине градиента исчезает.
+                            listOf(Color(0xFF0E7490), Color(0xFF0F172A), Color(0xFF7C3AED))
+                        else
+                            listOf(Color(0xFF7EE7FF), Color.White, Color(0xFFD8B4FE))
+                    )
+                )
             )
             Text(s[R.string.login_title], color = Muted, modifier = Modifier.padding(bottom = 20.dp))
             Field(user, s[R.string.login_label]) { user = it }
@@ -106,7 +114,7 @@ fun LoginScreen(
             ) {
                 Text(
                     if (busy) s[R.string.login_busy] else s[R.string.login_action],
-                    color = Color.White, fontWeight = FontWeight.SemiBold
+                    color = OnAccent, fontWeight = FontWeight.SemiBold
                 )
             }
             Spacer(Modifier.height(12.dp))
@@ -116,7 +124,7 @@ fun LoginScreen(
                     .clickable { showRegister = true }.padding(14.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(s[R.string.login_register_prompt], color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(s[R.string.login_register_prompt], color = OnAccent, fontWeight = FontWeight.SemiBold)
             }
             if (Store.running(ctx)) {
                 Box(
@@ -125,7 +133,7 @@ fun LoginScreen(
                         .clickable { disconnect() }.padding(14.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(s[R.string.login_disable_vpn], color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text(s[R.string.login_disable_vpn], color = OnAccent, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -141,9 +149,9 @@ internal fun RegisterForm(vm: AppViewModel, onClose: () -> Unit, onDone: (String
     var err by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize().background(Bg).padding(24.dp), verticalArrangement = Arrangement.Center) {
+    Column(Modifier.fillMaxSize().background(BgBrush).padding(24.dp), verticalArrangement = Arrangement.Center) {
         Text(s[R.string.reg_back], color = Cyan, modifier = Modifier.clickable { onClose() }.padding(bottom = 16.dp))
-        Text(s[R.string.reg_title], color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text(s[R.string.reg_title], color = TextMain, fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Text(s[R.string.reg_subtitle], color = Muted, modifier = Modifier.padding(top = 6.dp, bottom = 18.dp))
         Field(user, s[R.string.login_label]) { user = it }
         Spacer(Modifier.height(10.dp))
@@ -166,7 +174,7 @@ internal fun RegisterForm(vm: AppViewModel, onClose: () -> Unit, onDone: (String
         ) {
             Text(
                 if (busy) s[R.string.reg_busy] else s[R.string.reg_action],
-                color = Color.White, fontWeight = FontWeight.SemiBold
+                color = OnAccent, fontWeight = FontWeight.SemiBold
             )
         }
     }

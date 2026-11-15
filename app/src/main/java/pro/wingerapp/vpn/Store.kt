@@ -161,4 +161,22 @@ object Store {
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
 
     fun coreLog(ctx: Context, on: Boolean) = write(ctx) { putBoolean("coreLog", on) }
+
+    /**
+     * Тема оформления: 0 — тёмная, 1 — средняя, 2 — светлая. Средняя стоит по
+     * умолчанию: она между чёрным и серым и подходит большинству.
+     */
+    fun themeMode(ctx: Context) = prefs(ctx)?.getInt("themeMode", 1)?.coerceIn(0, 2) ?: 1
+
+    fun themeMode(ctx: Context, mode: Int) = write(ctx) { putInt("themeMode", mode.coerceIn(0, 2)) }
+
+    /**
+     * Через сколько очищать журнал, в минутах. По умолчанию 30, максимум 120:
+     * лог нужен для разбора последних событий, а не как архив.
+     */
+    fun logClearMinutes(ctx: Context) =
+        prefs(ctx)?.getInt("logClearMinutes", 30)?.coerceIn(5, 120) ?: 30
+
+    fun logClearMinutes(ctx: Context, minutes: Int) =
+        write(ctx) { putInt("logClearMinutes", minutes.coerceIn(5, 120)) }
 }

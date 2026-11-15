@@ -85,7 +85,7 @@ fun HomeScreen(
     // изменили в настройках, при возврате значение подхватится.
     val trafficSec = remember(tab) { pro.wingerapp.vpn.Store.trafficIntervalSec(ctx) }
 
-    Box(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
+    Box(Modifier.fillMaxSize().background(BgBrush).statusBarsPadding()) {
         when (tab) {
             0 -> HomeTab(
                 ctx = ctx, hwid = hwid, sub = st.plan, servers = st.servers, pings = st.pings,
