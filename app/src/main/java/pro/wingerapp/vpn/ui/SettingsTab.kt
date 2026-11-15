@@ -55,6 +55,7 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
     var mux by remember { mutableStateOf(Store.useMux(ctx)) }
     var mtu by remember { mutableStateOf(Store.mtuLow(ctx)) }
     var v6 by remember { mutableStateOf(Store.ipv6Proxy(ctx)) }
+    var rate by remember { mutableStateOf(Store.trafficIntervalSec(ctx)) }
     var logOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 96.dp)) {
         Text(s[R.string.set_title], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp)
@@ -85,6 +86,20 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                 Text(s[R.string.set_ipv6_hint], color = Muted, fontSize = 11.sp)
             }
             Switch(v6, { v6 = it; Store.ipv6Proxy(ctx, it); onApply() })
+        }
+        Text(s[R.string.set_display], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
+        Text(s[R.string.set_traffic_rate], color = Color.White, modifier = Modifier.padding(top = 8.dp))
+        Text(s[R.string.set_traffic_rate_hint], color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Значения читаются из настройки на главной при каждом входе на вкладку,
+            // поэтому переподключение туннеля здесь не нужно.
+            listOf(1, 5, 10, 30).forEach { sec ->
+                Seg(
+                    s.format(R.string.set_sec, sec),
+                    rate == sec,
+                    Modifier.weight(1f),
+                ) { rate = sec; Store.trafficIntervalSec(ctx, sec) }
+            }
         }
         Text(s[R.string.set_core], color = Color(0xFF7C8A9B), fontSize = 12.sp, letterSpacing = 1.sp, modifier = Modifier.padding(top = 16.dp))
         Text("sing-box-lx 1.14.4 (XHTTP)", color = Color.White, modifier = Modifier.padding(top = 8.dp))

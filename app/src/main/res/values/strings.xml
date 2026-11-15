@@ -57,6 +57,10 @@
     <string name="set_mux">Mux (не для vision)</string>
     <string name="set_ipv6">IPv6 для адреса прокси</string>
     <string name="set_ipv6_hint">Выключено: адрес сервера берётся только по A-записи (IPv4)</string>
+    <string name="set_display">ОТОБРАЖЕНИЕ</string>
+    <string name="set_traffic_rate">Обновление трафика</string>
+    <string name="set_traffic_rate_hint">Как часто обновляются счётчики ↑ и ↓ на главной</string>
+    <string name="set_sec">%1$d с</string>
     <string name="set_core">ЯДРО</string>
     <string name="set_core_log">Подробный лог ядра</string>
     <string name="set_core_log_hint">Нужен, чтобы разобрать, почему нет соединения</string>

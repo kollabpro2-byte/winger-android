@@ -57,6 +57,10 @@
     <string name="set_mux">Mux (not for vision)</string>
     <string name="set_ipv6">IPv6 for the proxy address</string>
     <string name="set_ipv6_hint">Off: the server address is resolved over A records (IPv4) only</string>
+    <string name="set_display">DISPLAY</string>
+    <string name="set_traffic_rate">Traffic refresh</string>
+    <string name="set_traffic_rate_hint">How often the ↑ and ↓ counters on the home screen update</string>
+    <string name="set_sec">%1$d s</string>
     <string name="set_core">CORE</string>
     <string name="set_core_log">Verbose core log</string>
     <string name="set_core_log_hint">Needed to find out why there is no connection</string>

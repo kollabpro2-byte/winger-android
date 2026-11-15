@@ -81,6 +81,10 @@ fun HomeScreen(
         }
     }
 
+    // Интервал счётчиков трафика читаем при каждом входе на главную: если
+    // изменили в настройках, при возврате значение подхватится.
+    val trafficSec = remember(tab) { pro.wingerapp.vpn.Store.trafficIntervalSec(ctx) }
+
     Box(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
         when (tab) {
             0 -> HomeTab(
@@ -88,6 +92,7 @@ fun HomeScreen(
                 place = st.selected, on = on,
                 pinging = st.pinging, refreshing = st.refreshing,
                 err = st.error ?: tunnelError, notice = st.notice,
+                trafficIntervalSec = trafficSec,
                 raw = st.raw, connect = connect, disconnect = disconnect,
                 reload = { ping -> vm.refresh(ping) },
                 onSelect = { name ->

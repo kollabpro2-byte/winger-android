@@ -72,6 +72,7 @@ import pro.wingerapp.vpn.tunTraffic
 internal fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
     place: String, on: Boolean, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
+    trafficIntervalSec: Int,
     raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
 ) {
@@ -82,7 +83,7 @@ internal fun HomeTab(
     val groups = remember(servers) { grouped(servers) }
     // Масштаб шрифтов списка под ширину экрана; сжимается, если самое длинное
     // имя перестало влезать целиком.
-    val listScale = rememberListScale(groups)
+    val listScale by rememberListScale(groups)
 
     // «подписка обновлена» — тихой строкой в шапке списка. Только альфа: строка
     // уже занимает место, поэтому ничего не сдвигается.
@@ -120,8 +121,9 @@ internal fun HomeTab(
         Row(verticalAlignment = Alignment.Bottom) {
             Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 16.5.sp)
             Text(
-                if (BuildConfig.DEBUG) "v${BuildConfig.VERSION_NAME}·${BuildConfig.VERSION_CODE}"
-                else "v${BuildConfig.VERSION_NAME}",
+                // Номер сборки виден всегда: по нему проверяют, что установлен
+                // именно присланный APK, а не предыдущий.
+                "v${BuildConfig.VERSION_NAME}·${BuildConfig.VERSION_CODE}",
                 color = Muted, fontSize = 10.5.sp, modifier = Modifier.padding(start = 5.dp)
             )
         }
@@ -132,7 +134,7 @@ internal fun HomeTab(
 
 
         // Слот фиксированной высоты: строка проявляется, но место занято всегда.
-        TrafficSlot(on = on)
+        TrafficSlot(on = on, intervalSec = trafficIntervalSec)
 
         Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle)
 
@@ -408,32 +410,41 @@ private val NoticeCyan = Color(0xFF7FE3FF)
  * перерисовывается только эта строка.
  */
 @Composable
-private fun TrafficSlot(on: Boolean) {
+private fun TrafficSlot(on: Boolean, intervalSec: Int) {
     val zero = remember { "0 Б" }
     var elapsed by remember { mutableStateOf("00:00:00") }
     var up by remember { mutableStateOf(zero) }
     var down by remember { mutableStateOf(zero) }
     val alpha by animateFloatAsState(if (on) 1f else 0f, tween(350), label = "traffic")
 
-    LaunchedEffect(on) {
+    LaunchedEffect(on, intervalSec) {
         if (!on) {
             elapsed = "00:00:00"; up = zero; down = zero
             return@LaunchedEffect
         }
         val startAt = System.currentTimeMillis()
+        val intervalMs = intervalSec.coerceIn(1, 60) * 1000L
         // TrafficStats даёт счётчики с момента загрузки устройства, поэтому
         // берём базовое значение при подключении и показываем разницу — иначе
         // в строке висел бы весь трафик за сутки.
         var base: Pair<Long, Long>? = null
+        var lastTrafficAt = 0L
         while (true) {
-            val sec = ((System.currentTimeMillis() - startAt) / 1000).toInt()
+            val now = System.currentTimeMillis()
+            val sec = ((now - startAt) / 1000).toInt()
+            // Таймер тикает раз в секунду — он и есть «время работы».
             elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
-            val tun = tunTraffic()
-            if (tun != null) {
-                val b = base
-                if (b == null) base = tun else {
-                    down = fmtBytes((tun.first - b.first).coerceAtLeast(0L))
-                    up = fmtBytes((tun.second - b.second).coerceAtLeast(0L))
+            // Счётчики — раз в intervalSec: чаще них меняются только шумы, а
+            // каждое чтение TrafficStats будит процесс.
+            if (now - lastTrafficAt >= intervalMs) {
+                lastTrafficAt = now
+                val tun = tunTraffic()
+                if (tun != null) {
+                    val b = base
+                    if (b == null) base = tun else {
+                        down = fmtBytes((tun.first - b.first).coerceAtLeast(0L))
+                        up = fmtBytes((tun.second - b.second).coerceAtLeast(0L))
+                    }
                 }
             }
             delay(1000)
@@ -504,11 +515,13 @@ private fun ListHeaderRow(
  * большой экран получает крупный текст, но ничего не обрезается.
  */
 @Composable
-private fun rememberListScale(groups: List<ServerGroup>): Float {
+private fun rememberListScale(groups: List<ServerGroup>): State<Float> {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val widthDp = LocalConfiguration.current.screenWidthDp
-    return remember(groups, widthDp) {
+    // produceState, а не remember: измерение шрифтов уходит в корутину композиции
+    // и не держит первый кадр. Значение появляется сразу после раскладки.
+    return produceState(1f, groups, widthDp, measurer, density) {
         val longest = groups.flatMap { it.nodes }.maxByOrNull { it.name.length }?.name.orEmpty()
         val available = (widthDp - 32f - 24f - 14f - 8f - 44f).coerceAtLeast(120f)
         var scale = (widthDp / 390f).coerceIn(0.95f, 1.25f)
@@ -520,7 +533,7 @@ private fun rememberListScale(groups: List<ServerGroup>): Float {
             if (with(density) { width.toDp().value } <= available) break
             scale -= 0.05f
         }
-        scale
+        value = scale
     }
 }
 

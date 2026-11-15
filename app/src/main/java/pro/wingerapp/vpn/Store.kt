@@ -146,6 +146,17 @@ object Store {
 
     fun ipv6Proxy(ctx: Context, on: Boolean) = write(ctx) { putBoolean("ipv6Proxy", on) }
 
+    /**
+     * Как часто обновляются счётчики трафика ↑ / ↓ на главной, в секундах.
+     * По умолчанию 5: раз в секунду `TrafficStats` будил бы процесс без пользы —
+     * цифры всё равно меняются на килобайты, а не на глазах.
+     */
+    fun trafficIntervalSec(ctx: Context) =
+        prefs(ctx)?.getInt("trafficIntervalSec", 5)?.coerceIn(1, 60) ?: 5
+
+    fun trafficIntervalSec(ctx: Context, seconds: Int) =
+        write(ctx) { putInt("trafficIntervalSec", seconds.coerceIn(1, 60)) }
+
     /** Verbose sing-box file log, also for release builds (diagnostics on device). */
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
 
