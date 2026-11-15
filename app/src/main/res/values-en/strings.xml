@@ -23,19 +23,13 @@
     <!-- Home -->
     <string name="home_no_subscription">No subscription yet</string>
     <string name="home_no_subscription_hint">Open the Account tab</string>
-    <string name="home_tap_prefix">tap the </string>
-    <string name="home_tap_suffix"> to connect</string>
-    <string name="home_eagle">eagle</string>
-    <string name="home_orb_on">ON</string>
-    <string name="home_orb_off">OFF</string>
+    <string name="home_orb_hint">turn on</string>
     <string name="home_location">Current location</string>
     <string name="home_select_server">choose a server</string>
     <string name="home_ping_ms">%1$d ms</string>
     <string name="home_days_left">left</string>
     <string name="home_devices_label">devices</string>
     <string name="home_traffic_label">traffic</string>
-    <string name="home_plan_prefix">Plan </string>
-    <string name="home_plan_left_prefix"> · </string>
     <string name="home_devices">Devices </string>
     <string name="home_devices_value">%1$d of %2$s</string>
     <string name="home_traffic">    Traffic </string>
@@ -119,7 +113,6 @@
     <string name="chat_title">Support</string>
     <string name="chat_close">Close</string>
     <string name="chat_hint">Write a message and a new ticket will be opened.</string>
-    <string name="chat_me">You</string>
     <string name="chat_placeholder">Message</string>
 
     <!-- Subscription card -->
@@ -134,11 +127,9 @@
     <string name="comp_bird">bird</string>
     <string name="comp_sbp">SBP</string>
     <string name="comp_mir">MIR</string>
-    <string name="comp_zero">0 B</string>
 
     <!-- Formatting -->
     <string name="fmt_gb_of">%1$s GB of %2$s</string>
-    <string name="fmt_gb_used">%1$s GB</string>
     <string name="fmt_gb_unit">GB</string>
     <string name="fmt_gb">%1$.0f GB</string>
     <string name="fmt_none">—</string>

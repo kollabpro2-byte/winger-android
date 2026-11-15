@@ -60,9 +60,6 @@ fun HomeScreen(
     val on by TunnelState.running.collectAsState()
     val tunnelError by TunnelState.error.collectAsState()
     val st by vm.state.collectAsState()
-    var elapsed by remember { mutableStateOf("00:00:00") }
-    var up by remember { mutableStateOf(s[R.string.comp_zero]) }
-    var down by remember { mutableStateOf(s[R.string.comp_zero]) }
 
     LaunchedEffect(hwid) { vm.start(hwid) }
 
@@ -84,33 +81,11 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(on) {
-        if (!on) return@LaunchedEffect
-        val startAt = System.currentTimeMillis()
-        // TrafficStats даёт счётчики с момента загрузки устройства, поэтому
-        // берём базовое значение при подключении и показываем разницу — иначе
-        // в строке висел бы весь трафик за сутки.
-        var base: Pair<Long, Long>? = null
-        while (on) {
-            val sec = ((System.currentTimeMillis() - startAt) / 1000).toInt()
-            elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
-            delay(1000)
-            val tun = tunTraffic() ?: continue
-            val b = base
-            if (b == null) {
-                base = tun
-                continue
-            }
-            down = fmtBytes((tun.first - b.first).coerceAtLeast(0L))
-            up = fmtBytes((tun.second - b.second).coerceAtLeast(0L))
-        }
-    }
-
     Box(Modifier.fillMaxSize().background(Bg).statusBarsPadding()) {
         when (tab) {
             0 -> HomeTab(
                 ctx = ctx, hwid = hwid, sub = st.plan, servers = st.servers, pings = st.pings,
-                place = st.selected, on = on, elapsed = elapsed, up = up, down = down,
+                place = st.selected, on = on,
                 pinging = st.pinging, refreshing = st.refreshing,
                 err = st.error ?: tunnelError, notice = st.notice,
                 raw = st.raw, connect = connect, disconnect = disconnect,

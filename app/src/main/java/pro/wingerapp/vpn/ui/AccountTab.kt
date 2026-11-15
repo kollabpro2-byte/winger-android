@@ -234,8 +234,10 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
                 if (devicesOpen) {
                     // Разделение по секциям: сначала этот телефон, потом остальные —
                     // иначе список из пяти устройств не даёт понять, где ты сам.
-                    val mine = c.devices.filter { it.hwid == hwid }
-                    val others = c.devices.filter { it.hwid != hwid }
+                    // Оба списка считаются один раз на смену кабинета, а не при
+                    // каждой перерисовке (переключатели, диалоги, прокрутка).
+                    val mine = remember(c.devices, hwid) { c.devices.filter { it.hwid == hwid } }
+                    val others = remember(c.devices, hwid) { c.devices.filter { it.hwid != hwid } }
                     if (mine.isNotEmpty()) {
                         DeviceGroup(s[R.string.acc_devices_this], accent = Color(0xFF3DFF7A)) {
                             mine.forEach { d -> DeviceRow(d, s[R.string.acc_device_active], s[R.string.acc_remove]) { confirm = d.hwid } }
@@ -435,10 +437,13 @@ internal fun SupportChat(ctx: Context, onClose: () -> Unit) {
 internal fun SubCard(c: pro.wingerapp.vpn.net.Cabinet) {
     val s = rememberStrings()
     val active = c.status == "ACTIVE"
-    val days = runCatching {
-        val d = java.time.LocalDate.parse(c.expires.take(10))
-        java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
-    }.getOrNull()
+    // Разбор даты — на смену срока, не на каждую перерисовку карточки.
+    val days = remember(c.expires) {
+        runCatching {
+            val d = java.time.LocalDate.parse(c.expires.take(10))
+            java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.now(), d)
+        }.getOrNull()
+    }
     val trafficValue = c.traffic.trim()
     val trafficSize = 15.sp
     BoxWithConstraints(

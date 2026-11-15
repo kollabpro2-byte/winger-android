@@ -1,7 +1,9 @@
 package pro.wingerapp.vpn.ui
 
 import android.content.Context
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -28,22 +30,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import pro.wingerapp.vpn.BuildConfig
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.ServerNode
+import pro.wingerapp.vpn.fmtBytes
 import pro.wingerapp.vpn.net.Sub
+import pro.wingerapp.vpn.tunTraffic
 
 /**
  * Домашний экран. Раскладка зафиксирована макетом 0.1.75:
@@ -62,18 +71,58 @@ import pro.wingerapp.vpn.net.Sub
 @Composable
 internal fun HomeTab(
     ctx: Context, hwid: String, sub: Sub?, servers: List<ServerNode>, pings: Map<String, Int?>,
-    place: String, on: Boolean, elapsed: String, up: String, down: String, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
+    place: String, on: Boolean, pinging: Boolean, refreshing: Boolean, err: String?, notice: String?,
     raw: String, connect: (String) -> Unit, disconnect: () -> Unit, reload: (Boolean) -> Unit,
     onSelect: (String) -> Unit, onToggle: () -> Unit
 ) {
     val s = rememberStrings()
+
+    // Группировка — проход по списку со сравнением строк, а пинг обновляется
+    // ежесекундно. Считаем её только при смене подписки, не на каждой перерисовке.
+    val groups = remember(servers) { grouped(servers) }
+    // Масштаб шрифтов списка под ширину экрана; сжимается, если самое длинное
+    // имя перестало влезать целиком.
+    val listScale = rememberListScale(groups)
+
+    // «подписка обновлена» — тихой строкой в шапке списка. Только альфа: строка
+    // уже занимает место, поэтому ничего не сдвигается.
+    val noticeAlpha = remember { Animatable(0f) }
+    LaunchedEffect(notice) {
+        if (notice.isNullOrBlank()) {
+            noticeAlpha.animateTo(0f, tween(600))
+        } else {
+            noticeAlpha.snapTo(0f)
+            noticeAlpha.animateTo(1f, tween(900))
+        }
+    }
+
+    // Вспышка кнопки обновления после успеха: два удара и долгое затухание.
+    val flash = remember { Animatable(0f) }
+    var wasRefreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(refreshing, err) {
+        val succeeded = wasRefreshing && !refreshing && err == null
+        wasRefreshing = refreshing
+        if (!succeeded) return@LaunchedEffect
+        flash.snapTo(0f)
+        flash.animateTo(
+            0f,
+            keyframes {
+                durationMillis = 3200
+                0.78f at 480
+                0.55f at 960
+                0.92f at 1440
+                0f at 3000
+            },
+        )
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
-            Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+            Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 16.5.sp)
             Text(
                 if (BuildConfig.DEBUG) "v${BuildConfig.VERSION_NAME}·${BuildConfig.VERSION_CODE}"
                 else "v${BuildConfig.VERSION_NAME}",
-                color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp, bottom = 2.dp)
+                color = Muted, fontSize = 10.5.sp, modifier = Modifier.padding(start = 5.dp)
             )
         }
         if (sub == null) {
@@ -83,19 +132,9 @@ internal fun HomeTab(
 
 
         // Слот фиксированной высоты: строка проявляется, но место занято всегда.
-        val trafficAlpha by animateFloatAsState(if (on) 1f else 0f, tween(350), label = "traffic")
-        Box(Modifier.fillMaxWidth().height(26.dp), contentAlignment = Alignment.CenterStart) {
-            if (on) Row(
-                Modifier.fillMaxWidth().alpha(trafficAlpha),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("↑ $up", color = Color(0xFF7EE0B0), fontSize = 13.sp)
-                Text(elapsed, color = Muted, fontSize = 13.sp)
-                Text("↓ $down", color = Color(0xFF9ECBFF), fontSize = 13.sp)
-            }
-        }
+        TrafficSlot(on = on)
 
-        Orb(on = on, labelOn = s[R.string.home_orb_off], labelOff = s[R.string.home_orb_on], onToggle = onToggle)
+        Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle)
 
         StatsRow(
             days = daysUntil(sub?.expires)?.let { s.quantity(R.plurals.days, it) } ?: s[R.string.fmt_none],
@@ -108,8 +147,9 @@ internal fun HomeTab(
         )
 
         val pingMs = pings[place]
+        // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
+        Text(s[R.string.home_location], color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 14.dp))
         LocationCard(
-            title = s[R.string.home_location],
             place = place.ifBlank { s[R.string.home_select_server] },
             ping = when {
                 place.isBlank() || !pings.containsKey(place) -> null
@@ -117,38 +157,47 @@ internal fun HomeTab(
                 else -> s.format(R.string.home_ping_ms, pingMs)
             },
             live = on,
-            refreshing = refreshing,
-            pinging = pinging,
-            onRefresh = { reload(false) },
-            onPing = { reload(true) },
         )
 
         err?.let {
             Text(it, color = Color(0xFFF87171), fontSize = 12.sp, maxLines = 3, modifier = Modifier.padding(top = 6.dp))
         }
-        if (notice != null) Text(
-            notice, color = Color(0xFF86EFAC), fontSize = 13.sp,
-            modifier = Modifier.padding(top = 8.dp).clip(RoundedCornerShape(20.dp))
-                .background(Color(0x2434C759)).padding(horizontal = 12.dp, vertical = 6.dp)
-        )
 
         if (servers.isEmpty()) Text(s[R.string.home_loading], color = Dim, modifier = Modifier.padding(top = 8.dp))
-        Column {
-            grouped(servers).forEach { group ->
-                Text(s[group.titleRes], color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
-                group.nodes.forEach { node ->
-                    ServerRow(
-                        node = node,
-                        proto = s.format(R.string.home_server_proto, node.port),
-                        selected = place == node.name,
-                        pingKnown = pings.containsKey(node.name),
-                        waiting = pinging && !pings.containsKey(node.name),
-                        ms = pings[node.name],
-                        noneLabel = s[R.string.home_ping_none],
-                        unknownLabel = s[R.string.home_ping_unknown],
-                        onClick = { onSelect(node.name) },
-                    )
-                }
+        groups.forEachIndexed { index, group ->
+            if (index == 0) {
+                // Первый заголовок группы и есть строка действий: заголовок слева,
+                // «подписка обновлена» по центру, обновление и пинг справа.
+                ListHeaderRow(
+                    title = s[group.titleRes],
+                    scale = listScale,
+                    noticeText = notice.orEmpty().lowercase(),
+                    noticeAlpha = noticeAlpha.value,
+                    flash = flash.value,
+                    refreshing = refreshing,
+                    pinging = pinging,
+                    onRefresh = { reload(false) },
+                    onPing = { reload(true) },
+                )
+            } else {
+                Text(
+                    s[group.titleRes], color = Muted, fontSize = (11f * listScale).sp,
+                    modifier = Modifier.padding(top = (10f * listScale).dp, bottom = (4f * listScale).dp)
+                )
+            }
+            group.nodes.forEach { node ->
+                ServerRow(
+                    node = node,
+                    proto = s.format(R.string.home_server_proto, node.port),
+                    selected = place == node.name,
+                    pingKnown = pings.containsKey(node.name),
+                    waiting = pinging && !pings.containsKey(node.name),
+                    ms = pings[node.name],
+                    noneLabel = s[R.string.home_ping_none],
+                    unknownLabel = s[R.string.home_ping_unknown],
+                    scale = listScale,
+                    onClick = { onSelect(node.name) },
+                )
             }
         }
         Spacer(Modifier.height(80.dp))
@@ -160,35 +209,67 @@ internal fun HomeTab(
  * орёл проявляется и подсвечивается за 1.2 с. Цвет не меняется на фиолетовый.
  */
 @Composable
-private fun Orb(on: Boolean, labelOn: String, labelOff: String, onToggle: () -> Unit) {
-    val lit by animateFloatAsState(if (on) 1f else 0f, tween(1200), label = "lit")
-    Box(Modifier.fillMaxWidth().height(190.dp), contentAlignment = Alignment.Center) {
+private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
+    // Медленное «ламповое» загорание: орел проявляется 2 с с задержкой 0.5 с,
+    // гаснет быстрее (1.5 с) — чтобы слово успело появиться строго после него.
+    val lit by animateFloatAsState(
+        if (on) 1f else 0f,
+        if (on) tween(2000, delayMillis = 500) else tween(1500),
+        label = "lit",
+    )
+    val eagleScale by animateFloatAsState(
+        if (on) 1f else 0.88f,
+        if (on) tween(2400, delayMillis = 500) else tween(1700),
+        label = "eagleScale",
+    )
+    // Подпись: появляется с задержкой 1.6 с (орла уже нет), исчезает за 0.45 с.
+    val hintAlpha by animateFloatAsState(
+        if (on) 0f else 1f,
+        if (on) tween(450) else tween(1200, delayMillis = 1600),
+        label = "hint",
+    )
+    val border = lerp(Color(0x1AFFFFFF), Cyan.copy(alpha = .55f), lit)
+    val glow by animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
+
+    Box(Modifier.fillMaxWidth().height(190.dp).padding(top = 6.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(176.dp)
-                .shadow(if (on) 18.dp else 10.dp, CircleShape)
-                .clip(CircleShape)
-                .background(Brush.radialGradient(listOf(Color(0xFF24506F), Color(0xFF122B42), Color(0xFF0A1628))))
-                .border(2.dp, if (on) Cyan.copy(alpha = .85f) else Color(0xFF3A7CA0), CircleShape)
+                .graphicsLayer {
+                    shadowElevation = (6f + 12f * lit) * density
+                    shape = CircleShape
+                    clip = true
+                }
+                .background(
+                    Brush.radialGradient(
+                        listOf(Color(0xFF0E1B2C), Color(0xFF0A1220), Color(0xFF070C14))
+                    )
+                )
+                .border(1.5.dp, border, CircleShape)
                 .clickable { onToggle() },
             contentAlignment = Alignment.Center
         ) {
+            // Внутреннее свечение — только при включении.
             Box(
-                Modifier.matchParentSize().alpha(lit * .55f).background(
+                Modifier.matchParentSize().alpha(glow).background(
                     Brush.radialGradient(listOf(Color(0x5722D3EE), Color(0x1122D3EE), Color(0x0022D3EE)))
                 )
             )
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(
-                    painterResource(R.drawable.eagle), "Winger",
-                    Modifier.size(96.dp).alpha(0.5f + 0.5f * lit), contentScale = ContentScale.Fit
-                )
-                Text(
-                    if (on) labelOn else labelOff,
-                    color = if (on) Color(0xFFC7F5FF) else Color(0xFF9FE6F7),
-                    fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
+            // Орёл: только на включённом, 48 dp вместо прежних 96.
+            Image(
+                painterResource(R.drawable.eagle), null,
+                Modifier.size(48.dp).graphicsLayer {
+                    alpha = lit
+                    scaleX = eagleScale
+                    scaleY = eagleScale
+                },
+                contentScale = ContentScale.Fit,
+            )
+            // Подпись «включить»: почти прозрачная, гаснет сразу при нажатии.
+            Text(
+                hint.lowercase(),
+                color = Color(0xFF9FE6F7).copy(alpha = .22f * hintAlpha),
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 3.sp,
+            )
         }
     }
 }
@@ -282,50 +363,128 @@ private fun StatIcon(kind: StatKind, tint: Color) {
  * подписки и замер пинга.
  */
 @Composable
-private fun LocationCard(
-    title: String, place: String, ping: String?, live: Boolean,
-    refreshing: Boolean, pinging: Boolean, onRefresh: () -> Unit, onPing: () -> Unit
-) {
+private fun LocationCard(place: String, ping: String?, live: Boolean) {
     Row(
-        Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(20.dp))
+        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.linearGradient(listOf(Color(0x338B5CF6), Color(0x223B82F6), Color(0x2222D3EE)))
             )
-            .border(1.dp, Purple.copy(alpha = .32f), RoundedCornerShape(20.dp))
-            .padding(start = 13.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
+            .border(1.dp, Purple.copy(alpha = .32f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
-            // Имя сервера подгоняется по ширине: длинное название (например
-            // «Автопилот · Топ-пинг | LTE») уменьшается, пока не влезет целиком,
-            // вместо обрезки многоточием.
+            // Имя подгоняется по ширине: длинное название уменьшается, пока не
+            // влезет целиком, вместо обрезки многоточием.
             val nameSize = fitNameSize(place, maxWidth, 13.sp, 7.sp)
-            Column {
-                Text(title, color = Color(0xFFA6B4C6), fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1)
-                Text(
-                    place, color = Color.White, fontSize = nameSize, fontWeight = FontWeight.Bold,
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(7.dp).clip(CircleShape)
-                            .background(if (live) Color(0xFF3DFF7A) else Color(0xFF5A6A7E))
-                    )
-                    Text(
-                        ping ?: "—", color = Color(0xFF9FE6F7), fontSize = 10.5.sp,
-                        modifier = Modifier.padding(start = 6.dp)
-                    )
+            Text(
+                place, color = Color.White, fontSize = nameSize, fontWeight = FontWeight.Bold,
+                maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
+            )
+        }
+        // Пинг — справа от названия, в той же строке.
+        Row(
+            Modifier.padding(start = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(7.dp).clip(CircleShape)
+                    .background(if (live) Color(0xFF3DFF7A) else Color(0xFF5A6A7E))
+            )
+            Text(
+                ping ?: "—", color = Color(0xFF9FE6F7), fontSize = 10.5.sp,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+    }
+}
+
+/** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления. */
+private val NoticeCyan = Color(0xFF7FE3FF)
+
+/**
+ * Строка «↑ / таймер / ↓» в собственном composable: счётчики тикают раз в секунду,
+ * и раньше каждый тик перерисовывал весь экран вместе со списком нод. Теперь
+ * перерисовывается только эта строка.
+ */
+@Composable
+private fun TrafficSlot(on: Boolean) {
+    val zero = remember { "0 Б" }
+    var elapsed by remember { mutableStateOf("00:00:00") }
+    var up by remember { mutableStateOf(zero) }
+    var down by remember { mutableStateOf(zero) }
+    val alpha by animateFloatAsState(if (on) 1f else 0f, tween(350), label = "traffic")
+
+    LaunchedEffect(on) {
+        if (!on) {
+            elapsed = "00:00:00"; up = zero; down = zero
+            return@LaunchedEffect
+        }
+        val startAt = System.currentTimeMillis()
+        // TrafficStats даёт счётчики с момента загрузки устройства, поэтому
+        // берём базовое значение при подключении и показываем разницу — иначе
+        // в строке висел бы весь трафик за сутки.
+        var base: Pair<Long, Long>? = null
+        while (true) {
+            val sec = ((System.currentTimeMillis() - startAt) / 1000).toInt()
+            elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
+            val tun = tunTraffic()
+            if (tun != null) {
+                val b = base
+                if (b == null) base = tun else {
+                    down = fmtBytes((tun.first - b.first).coerceAtLeast(0L))
+                    up = fmtBytes((tun.second - b.second).coerceAtLeast(0L))
                 }
             }
+            delay(1000)
         }
+    }
+
+    Box(Modifier.fillMaxWidth().height(26.dp), contentAlignment = Alignment.CenterStart) {
+        if (on) Row(
+            Modifier.fillMaxWidth().alpha(alpha),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("↑ $up", color = Color(0xFF7EE0B0), fontSize = 13.sp)
+            Text(elapsed, color = Muted, fontSize = 13.sp)
+            Text("↓ $down", color = Color(0xFF9ECBFF), fontSize = 13.sp)
+        }
+    }
+}
+
+/**
+ * Шапка списка: заголовок первой группы слева, сообщение по центру и кнопки
+ * обновления/пинга справа. Кнопки вынесены из карточки локации — так они
+ * разделяют «что выбрано» и «из чего выбирать».
+ */
+@Composable
+private fun ListHeaderRow(
+    title: String, scale: Float, noticeText: String, noticeAlpha: Float, flash: Float,
+    refreshing: Boolean, pinging: Boolean, onRefresh: () -> Unit, onPing: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = (12f * scale).dp, bottom = (12f * scale).dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, color = Muted, fontSize = (11f * scale).sp)
+        Text(
+            noticeText, color = NoticeCyan.copy(alpha = noticeAlpha),
+            fontSize = (11f * scale).sp, fontWeight = FontWeight.SemiBold,
+            letterSpacing = .25.sp, maxLines = 1, softWrap = false,
+            textAlign = TextAlign.Center, overflow = TextOverflow.Clip,
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+        )
+        // Вспышка кнопки обновления: два удара и долгое затухание.
+        val bg = lerp(Color.White.copy(alpha = .06f), NoticeCyan.copy(alpha = .92f), flash)
+        val ring = lerp(Color.White.copy(alpha = .10f), NoticeCyan, flash)
+        val ink = lerp(Color(0xFFC9D7E4), Color(0xFF052A34), flash)
         Box(
-            Modifier.size(34.dp).clip(CircleShape).background(Color.White.copy(alpha = .06f))
-                .border(1.dp, Color.White.copy(alpha = .10f), CircleShape)
-                .clickable { onRefresh() },
+            Modifier.size(34.dp).clip(CircleShape).background(bg)
+                .border(1.dp, ring, CircleShape).clickable { onRefresh() },
             contentAlignment = Alignment.Center
         ) {
             if (refreshing) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Cyan)
-            else Text("⟳", color = Color(0xFFC9D7E4), fontSize = 15.sp)
+            else Text("⟳", color = ink, fontSize = 15.sp)
         }
         Spacer(Modifier.width(8.dp))
         Box(
@@ -334,10 +493,34 @@ private fun LocationCard(
                 .clickable(enabled = !pinging) { onPing() },
             contentAlignment = Alignment.Center
         ) {
-            // Рисованная молния вместо эмодзи: глиф ⚡ игнорирует fontSize и
-            // всегда рисуется крупным, поэтому размер задаётся здесь.
             BoltIcon(Color(0xFFE9D5FF), 11.dp)
         }
+    }
+}
+
+/**
+ * Масштаб шрифтов списка под ширину экрана: 360 dp → 0.95, 480 dp → до 1.25.
+ * Уменьшается шагами, если самое длинное имя перестало влезать целиком, — так
+ * большой экран получает крупный текст, но ничего не обрезается.
+ */
+@Composable
+private fun rememberListScale(groups: List<ServerGroup>): Float {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    return remember(groups, widthDp) {
+        val longest = groups.flatMap { it.nodes }.maxByOrNull { it.name.length }?.name.orEmpty()
+        val available = (widthDp - 32f - 24f - 14f - 8f - 44f).coerceAtLeast(120f)
+        var scale = (widthDp / 390f).coerceIn(0.95f, 1.25f)
+        while (scale > 0.8f) {
+            val width = measurer.measure(
+                text = AnnotatedString(longest),
+                style = TextStyle(fontSize = (13f * scale).sp),
+            ).size.width
+            if (with(density) { width.toDp().value } <= available) break
+            scale -= 0.05f
+        }
+        scale
     }
 }
 
@@ -345,26 +528,27 @@ private fun LocationCard(
 @Composable
 private fun ServerRow(
     node: ServerNode, proto: String, selected: Boolean, pingKnown: Boolean, waiting: Boolean,
-    ms: Int?, noneLabel: String, unknownLabel: String, onClick: () -> Unit
+    ms: Int?, noneLabel: String, unknownLabel: String, scale: Float = 1f, onClick: () -> Unit
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp))
+        Modifier.fillMaxWidth().padding(vertical = (3f * scale).dp).clip(RoundedCornerShape(14.dp))
             .background(if (selected) Purple.copy(alpha = .30f) else Elev)
             .border(if (selected) 2.dp else 1.dp, if (selected) Purple else Line, RoundedCornerShape(14.dp))
-            .clickable { onClick() }.padding(horizontal = 12.dp, vertical = 8.dp),
+            .clickable { onClick() }
+            .padding(horizontal = (12f * scale).dp, vertical = (8f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            if (selected) "✓" else "", color = Purple, fontSize = 14.sp,
-            fontWeight = FontWeight.Bold, modifier = Modifier.width(14.dp)
+            if (selected) "✓" else "", color = Purple, fontSize = (14f * scale).sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.width((14f * scale).dp)
         )
-        Column(Modifier.weight(1f).padding(start = 4.dp)) {
+        Column(Modifier.weight(1f).padding(start = (4f * scale).dp)) {
             Text(
                 node.name, color = if (selected) Color.White else Color(0xFFE8EEF6),
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                fontSize = (13f * scale).sp, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
-            Text(proto, color = Muted, fontSize = 10.sp, maxLines = 1)
+            Text(proto, color = Muted, fontSize = (10f * scale).sp, maxLines = 1)
         }
         when {
             waiting -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)
@@ -383,7 +567,8 @@ private fun ServerRow(
                             ms == -1 -> unknownLabel
                             else -> ms.toString()
                         },
-                        color = c, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp)
+                        color = c, fontSize = (11f * scale).sp,
+                        modifier = Modifier.padding(start = 6.dp)
                     )
                 }
             }
