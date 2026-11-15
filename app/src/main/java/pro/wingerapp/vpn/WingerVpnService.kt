@@ -54,6 +54,10 @@ class WingerVpnService : VpnService() {
         VpnLog.init(this)
         CrashGuard.install()
         TunnelState.sync(this)
+        // Сервис могли пересоздать после того, как прошлая сессия не отпустила
+        // tun (тогда значок VPN висит на экране). Набор дескрипторов статический,
+        // поэтому здесь видно наследство прошлого экземпляра.
+        sweepTunFds(tunFds.toList(), "при создании сервиса")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -75,7 +79,7 @@ class WingerVpnService : VpnService() {
             return START_NOT_STICKY
         }
         val gen = generation.incrementAndGet()
-        stopCore()
+        stopCore(restarting = true)
         Thread {
             try {
                 VpnLog.add("старт sing-box, конфиг ${config.length} байт")
@@ -321,11 +325,41 @@ class WingerVpnService : VpnService() {
         }.start()
     }
 
-    private fun stopCore() {
+    private fun stopCore(restarting: Boolean = false) {
         runCatching { singServer?.closeService() }.onFailure { VpnLog.add("closeService: ${err(it)}") }
         runCatching { singServer?.close() }.onFailure { VpnLog.add("server.close: ${err(it)}") }
         singServer = null
+        // Ядро должно закрыть tun само. Если не успело (или висит в горутине),
+        // значок VPN остаётся на экране до перезапуска приложения — поэтому
+        // проверяем дескрипторы и закрываем те, что всё ещё указывают на tun.
+        //
+        // При перезапуске (смена сервера) проверяем сразу: новый tun ещё не
+        // создан, значит номер дескриптора не может принадлежать новой сессии.
+        // При полной остановке ждём 700 мс, чтобы ядро успело закрыть само,
+        // и пропускаем проверку, если за это время началась новая сессия.
+        val snapshot = tunFds.toList()
+        if (snapshot.isEmpty()) return
+        if (restarting) {
+            sweepTunFds(snapshot, "перед новой сессией")
+            return
+        }
+        val gen = generation.get()
+        Thread {
+            Thread.sleep(700)
+            if (generation.get() != gen) return@Thread
+            sweepTunFds(snapshot, "после остановки ядра")
+        }.start()
     }
+
+    /**
+     * Закрывает пережившие остановку дескрипторы tun.
+     *
+     * Номер дескриптора сам по себе ничего не значит: ядро могло его закрыть, а
+     * система — выдать тот же номер другому файлу, и тогда `close()` убьёт чужой
+     * дескриптор (ровно этот баг ловили раньше). Поэтому сначала читаем, куда
+     * дескриптор указывает, и закрываем только те, что действительно ведут в tun.
+     */
+    private fun sweepTunFds(fds: List<Int>, tag: String) = closeTuns(fds, tag)
 
     /**
      * The core asks for a tun fd and owns it afterwards, so it is detached from
@@ -386,6 +420,7 @@ class WingerVpnService : VpnService() {
             error("tun bad fd=$fd")
         }
         val detached = pfd.detachFd()
+        tunFds.add(detached)
         VpnLog.add("tun fd=$detached mtu=$mtu (владение у ядра)")
         return detached
     }
@@ -751,5 +786,40 @@ class WingerVpnService : VpnService() {
         const val ACTION_STOP = "pro.wingerapp.vpn.STOP"
         private const val CHANNEL = "winger"
         private const val NOTIFY_ID = 1
+
+        /**
+         * Дескрипторы tun, которые мы отдали ядру. Номер нужен, чтобы после
+         * остановки проверить, отпустило ли ядро интерфейс: пока дескриптор
+         * открыт, Android держит значок VPN в строке состояния, даже если
+         * приложение уже считает себя выключенным.
+         *
+         * Набор живёт в companion, потому что сервис могут пересоздать;
+         * иначе наследство прошлого экземпляра было бы не видно.
+         */
+        private val tunFds = java.util.concurrent.CopyOnWriteArraySet<Int>()
+
+        /** Дескрипторы, которые ещё числятся за нами: активити может попросить их закрыть. */
+        fun pendingTunFds(): List<Int> = tunFds.toList()
+
+        /** Логика та же, что у sweepTunFds, но доступна без экземпляра сервиса. */
+        fun closeTuns(fds: List<Int>, tag: String) {
+            for (fd in fds) {
+                tunFds.remove(fd)
+                val target = runCatching { android.system.Os.readlink("/proc/self/fd/$fd") }.getOrNull()
+                if (target == null) {
+                    VpnLog.add("tun fd=$fd уже закрыт ($tag)")
+                    continue
+                }
+                if (!target.contains("tun")) {
+                    VpnLog.add("tun fd=$fd переиспользован ($target), не трогаем")
+                    continue
+                }
+                val closed = runCatching { android.os.ParcelFileDescriptor.adoptFd(fd).close() }
+                VpnLog.add(
+                    if (closed.isSuccess) "tun fd=$fd закрыт принудительно ($tag)"
+                    else "tun fd=$fd не закрылся ($tag): ${closed.exceptionOrNull()?.message}"
+                )
+            }
+        }
     }
 }

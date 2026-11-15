@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -43,16 +45,29 @@ class MainActivity : ComponentActivity() {
         Store.running(this, false)
         Store.clearLastConfig(this)
         TunnelState.off()
-        // На HyperOS интент ACTION_STOP иногда не доходит (сервис уже не тот,
-        // что был, или система держит его сама), и тогда значок VPN остаётся
-        // висеть до полного закрытия приложения. Поэтому останавливаем двумя
-        // путями: сначала просим сервис остановиться штатно, затем гарантированно
-        // гасим его через stopService — это вызывает onDestroy, а тот закрывает ядро.
+        // Штатный путь: сервис сам закрывает ядро, снимает уведомление и
+        // отпускает tun. Если погасить сервис сразу же (stopService подряд),
+        // ACTION_STOP не успевал обработаться, и на HyperOS ядро иногда
+        // оставалось жить вместе со своим tun — отсюда висящий значок VPN.
         val stop = Intent(this, WingerVpnService::class.java).setAction(WingerVpnService.ACTION_STOP)
         runCatching { startService(stop) }
             .onFailure { VpnLog.add("disconnect: startService(STOP) не сработал: ${it.message}") }
-        runCatching { stopService(Intent(this, WingerVpnService::class.java)) }
-            .onFailure { VpnLog.add("disconnect: stopService не сработал: ${it.message}") }
+        // Контрольный выстрел: если сервис всё ещё существует через 1.2 с,
+        // гасим принудительно — onDestroy закроет ядро и tun.
+        Handler(Looper.getMainLooper()).postDelayed({
+            val stopped = runCatching { stopService(Intent(this, WingerVpnService::class.java)) }
+            VpnLog.add("disconnect: контрольная остановка через 1.2 с, сработала=${stopped.getOrNull()}")
+        }, 1200)
+        // Последняя страховка: если дескриптор tun всё ещё открыт, значит ядро его
+        // не отпустило и Android продолжит показывать значок VPN. Закрываем сами —
+        // closeTuns сначала проверяет, что номер всё ещё ведёт в tun.
+        Handler(Looper.getMainLooper()).postDelayed({
+            val left = WingerVpnService.pendingTunFds()
+            if (left.isNotEmpty()) {
+                VpnLog.add("disconnect: через 3 с остались tun fd=$left")
+                WingerVpnService.closeTuns(left, "контроль из активити")
+            }
+        }, 3000)
         VpnLog.add("disconnect: остановка запрошена")
     }
     override fun onCreate(savedInstanceState: Bundle?) {
