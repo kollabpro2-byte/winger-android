@@ -192,7 +192,7 @@ internal fun HomeTab(
             group.nodes.forEach { node ->
                 ServerRow(
                     node = node,
-                    proto = s.format(R.string.home_server_proto, node.port),
+                    proto = node.proto.ifBlank { s.format(R.string.home_server_proto, node.port) },
                     selected = place == node.name,
                     pingKnown = pings.containsKey(node.name),
                     waiting = pinging && !pings.containsKey(node.name),
@@ -236,7 +236,9 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
     // включении разгорается до 3.5 dp циановым — «пожирнее».
     val border = lerp(Color(0x40FFFFFF), Cyan.copy(alpha = .85f), lit)
     val borderWidth = 1.5f + 2f * lit
-    val glow by animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
+    // Ореол: только лёгкая подсветка внутри круга, без «прожектора» —
+    // сильно горящий ореол вокруг орла не нужен.
+    val glow by animateFloatAsState(if (on) 0.45f else 0f, tween(2400), label = "glow")
 
     Box(Modifier.fillMaxWidth().height(190.dp).padding(top = 6.dp), contentAlignment = Alignment.Center) {
         Box(
@@ -258,10 +260,10 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                 .clickable { onToggle() },
             contentAlignment = Alignment.Center
         ) {
-            // Внутреннее свечение — только при включении.
+            // Внутреннее свечение — только при включении и совсем слабое.
             Box(
                 Modifier.matchParentSize().alpha(glow).background(
-                    Brush.radialGradient(listOf(Color(0x5722D3EE), Color(0x1122D3EE), Color(0x0022D3EE)))
+                    Brush.radialGradient(listOf(Color(0x3322D3EE), Color(0x0A22D3EE), Color(0x0022D3EE)))
                 )
             )
             // Орёл: только на включённом, 48 dp вместо прежних 96.
@@ -577,21 +579,11 @@ private fun rememberListScale(groups: List<ServerGroup>): State<Float> {
     // produceState, а не remember: измерение шрифтов уходит в корутину композиции
     // и не держит первый кадр. Значение появляется сразу после раскладки.
     return produceState(1f, groups, widthDp, measurer, density) {
-        val longest = groups.flatMap { it.nodes }.maxByOrNull { it.name.length }?.name.orEmpty()
-        val available = (widthDp - 32f - 24f - 14f - 8f - 44f).coerceAtLeast(120f)
-        // SRV_ZOOM = 1.5: секции серверов крупнее, как в утверждённом макете.
-        // Если длинное имя перестаёт влезать, масштаб шагами уменьшается —
-        // «крупнее, но всегда целиком».
-        var scale = (widthDp / 390f).coerceIn(0.95f, 1.25f) * 1.5f
-        while (scale > 1.0f) {
-            val width = measurer.measure(
-                text = AnnotatedString(longest),
-                style = TextStyle(fontSize = (13f * scale).sp),
-            ).size.width
-            if (with(density) { width.toDp().value } <= available) break
-            scale -= 0.05f
-        }
-        value = scale
+        // Размер ячеек фиксирован (1.5× от базового): раньше масштаб уменьшался,
+        // если длинное имя не влезало, и ячейки оставались мелкими. Теперь
+        // подстраивается только текст имени (см. ServerRow), а сама секция
+        // всегда крупная, как в утверждённом макете.
+        value = (widthDp / 390f).coerceIn(0.95f, 1.25f) * 1.5f
     }
 }
 
@@ -619,12 +611,20 @@ private fun ServerRow(
             fontWeight = FontWeight.Bold, modifier = Modifier.width((14f * scale).dp)
         )
         Column(Modifier.weight(1f).padding(start = (4f * scale).dp)) {
-            Text(
-                node.name, color = if (selected) (if (AppTheme.p.isLight) Color(0xFF3B0764) else Color.White) else TextMain,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                fontSize = (13f * scale).sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            Text(proto, color = Muted, fontSize = (10f * scale).sp, maxLines = 1)
+            // Имя подбирает свой кегль под ширину ячейки: сама секция крупная,
+            // но длинное название не обрезается многоточием.
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val nameSize = fitNameSize(node.name, maxWidth, (13f * scale).sp, (9f * scale).sp)
+                Text(
+                    node.name,
+                    color = if (selected) (if (AppTheme.p.isLight) Color(0xFF3B0764) else Color.White) else TextMain,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    fontSize = nameSize, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip
+                )
+            }
+            // Протокол — мелкой подписью: «VLESS TCP REALITY JSON» заметно тише
+            // названия, чтобы не спорить с ним за внимание.
+            Text(proto, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         when {
             waiting -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Cyan)

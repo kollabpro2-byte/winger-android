@@ -3,7 +3,13 @@ package pro.wingerapp.vpn
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class ServerNode(val name: String, val host: String, val port: Int)
+data class ServerNode(
+    val name: String,
+    val host: String,
+    val port: Int,
+    /** «VLESS TCP REALITY JSON» — реальный протокол из конфига, а не догадка. */
+    val proto: String = "",
+)
 
 data class SubConfig(val raw: String, val servers: List<ServerNode>)
 
@@ -33,10 +39,35 @@ fun readHapp(body: String): SubConfig {
         val cfg = arr.optJSONObject(i) ?: continue
         val name = cfg.optString("remarks").ifBlank { "Сервер ${i + 1}" }
         val point = firstEndpoint(cfg)
-        servers += ServerNode(name, point?.host.orEmpty(), point?.port ?: 443)
+        servers += ServerNode(name, point?.host.orEmpty(), point?.port ?: 443, protocolLabel(cfg))
     }
     if (servers.isEmpty()) error("в подписке нет серверов")
     return SubConfig(body, servers)
+}
+
+/**
+ * «VLESS TCP REALITY JSON» — подпись сервера по его настоящему протоколу.
+ *
+ * Берём первый проксирующий outbound: `protocol` даёт VLESS/VMess/Trojan,
+ * `streamSettings.network` — транспорт (tcp/ws/grpc/xhttp), `security` — TLS,
+ * REALITY или ничего. В конце JSON: подписка приходит именно в этом формате,
+ * и по подписи сразу видно, что это не готовый конфиг sing-box.
+ */
+private fun protocolLabel(cfg: JSONObject): String {
+    val obs = cfg.optJSONArray("outbounds") ?: return "JSON"
+    for (i in 0 until obs.length()) {
+        val o = obs.optJSONObject(i) ?: continue
+        val proto = o.optString("protocol").lowercase()
+        if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
+        val stream = o.optJSONObject("streamSettings")
+        val network = stream?.optString("network").orEmpty()
+        val security = stream?.optString("security").orEmpty()
+        // json в верхнем регистре: подпись целиком читается как «VLESS TCP REALITY JSON».
+        return listOf(proto, network, security, "json")
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { it.uppercase() }
+    }
+    return "JSON"
 }
 
 /**
