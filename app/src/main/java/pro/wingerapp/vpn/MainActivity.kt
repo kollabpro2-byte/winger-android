@@ -58,16 +58,11 @@ class MainActivity : ComponentActivity() {
             val stopped = runCatching { stopService(Intent(this, WingerVpnService::class.java)) }
             VpnLog.add("disconnect: контрольная остановка через 1.2 с, сработала=${stopped.getOrNull()}")
         }, 1200)
-        // Последняя страховка: если дескриптор tun всё ещё открыт, значит ядро его
-        // не отпустило и Android продолжит показывать значок VPN. Закрываем сами —
-        // closeTuns сначала проверяет, что номер всё ещё ведёт в tun.
-        Handler(Looper.getMainLooper()).postDelayed({
-            val left = WingerVpnService.pendingTunFds()
-            if (left.isNotEmpty()) {
-                VpnLog.add("disconnect: через 3 с остались tun fd=$left")
-                WingerVpnService.closeTuns(left, "контроль из активити")
-            }
-        }, 3000)
+        // Никакого автоматического закрытия tun из активити: список дескрипторов,
+        // прочитанный «потом», может содержать уже живой tun новой сессии, и тогда
+        // закроется рабочий туннель (или система останется с VPN-маршрутами без
+        // интерфейса — и интернета не будет вовсе). Дескрипторы освобождает сам
+        // сервис, когда его сессия уже остановлена.
         VpnLog.add("disconnect: остановка запрошена")
     }
     override fun onCreate(savedInstanceState: Bundle?) {

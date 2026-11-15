@@ -798,11 +798,14 @@ class WingerVpnService : VpnService() {
          */
         private val tunFds = java.util.concurrent.CopyOnWriteArraySet<Int>()
 
-        /** Дескрипторы, которые ещё числятся за нами: активити может попросить их закрыть. */
-        fun pendingTunFds(): List<Int> = tunFds.toList()
-
         /** Логика та же, что у sweepTunFds, но доступна без экземпляра сервиса. */
         fun closeTuns(fds: List<Int>, tag: String) {
+            // Пока туннель работает, его tun закрывать нельзя ни при каких
+            // обстоятельствах: это и есть «VPN включён, но интернета нет».
+            if (TunnelState.running.value) {
+                VpnLog.add("tun fd=$fds не трогаем: сессия активна ($tag)")
+                return
+            }
             for (fd in fds) {
                 tunFds.remove(fd)
                 val target = runCatching { android.system.Os.readlink("/proc/self/fd/$fd") }.getOrNull()
