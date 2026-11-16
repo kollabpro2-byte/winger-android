@@ -64,7 +64,6 @@ import kotlin.math.sin
 import pro.wingerapp.vpn.BuildConfig
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.ServerNode
-import pro.wingerapp.vpn.fmtBytes
 import pro.wingerapp.vpn.net.Sub
 import pro.wingerapp.vpn.tunTraffic
 
