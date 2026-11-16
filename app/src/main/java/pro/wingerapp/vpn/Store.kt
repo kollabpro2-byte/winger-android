@@ -23,7 +23,7 @@ object Store {
      * и держать их в зашифрованном файле незачем: каждое обращение к нему
      * поднимает Android Keystore, а это 100–300 мс на холодном старте.
      */
-    private val SECRET_KEYS = setOf("cookies", "login", "password", "lastConfig")
+    private val SECRET_KEYS = setOf("cookies", "login", "password", "lastConfig", "subCache")
 
     @Volatile
     private var uiCache: SharedPreferences? = null
@@ -166,6 +166,13 @@ object Store {
     fun lastConfig(ctx: Context, json: String) = writeSecret(ctx) { putString("lastConfig", json) }
 
     fun clearLastConfig(ctx: Context) = writeSecret(ctx) { remove("lastConfig") }
+
+    /** Кэш последней успешной подписки (внутри — ключи серверов, поэтому шифруем). */
+    fun subCache(ctx: Context) = secretText(ctx, "subCache")
+
+    fun subCache(ctx: Context, json: String) = writeSecret(ctx) { putString("subCache", json) }
+
+    fun clearSubCache(ctx: Context) = writeSecret(ctx) { remove("subCache") }
 
     // --- settings --------------------------------------------------------------------
 

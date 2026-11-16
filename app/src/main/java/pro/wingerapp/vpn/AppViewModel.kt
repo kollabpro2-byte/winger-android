@@ -50,6 +50,11 @@ data class SubscriptionState(
      */
     val noticeSeq: Int = 0,
     /**
+     * Данные пришли из кэша, а сети ещё не было. Нужен, чтобы интерфейс знал:
+     * список может быть устаревшим, и обновление сейчас в пути.
+     */
+    val fromCache: Boolean = false,
+    /**
      * «Включись сам»: выставляется один раз — когда после входа загрузилась
      * подписка и сервер уже выбран. Экран забирает флаг через [AppViewModel.consumeAutoConnect].
      */
@@ -84,6 +89,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private var deviceId = ""
 
+    /** Обновлялись ли уже из сети в этой сессии (кэш не считается). */
+    private var refreshed = false
+
     /**
      * Взводится в [signedIn] и гасится после первой успешной загрузки подписки:
      * именно в этот момент приложение выбирает «Автопилот» и включается само.
@@ -110,8 +118,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { Store.migrateSettingsIntoPlain(ctx) }
             }
             _signedIn.value = withContext(Dispatchers.IO) { runCatching { Api.hasSession() }.getOrDefault(false) }
+            // Пока сеть отвечает, показываем прошлую подписку из кэша: главная
+            // открывается сразу со списком серверов, а не с пустым экраном.
+            if (_signedIn.value) loadCache(ctx)
             _ready.value = true
         }
+    }
+
+    private suspend fun loadCache(ctx: Application) {
+        val cached = withContext(Dispatchers.IO) { runCatching { SubCache.load(ctx) }.getOrNull() } ?: return
+        val nodes = withContext(Dispatchers.IO) { runCatching { readHapp(cached.raw) }.getOrNull() }
+        val servers = nodes?.servers.orEmpty()
+        val picked = cached.selected.takeIf { name -> servers.any { it.name == name } }
+            ?: servers.firstOrNull()?.name.orEmpty()
+        _state.update {
+            it.copy(
+                plan = cached.plan,
+                raw = cached.raw,
+                servers = servers,
+                selected = picked,
+                loading = false,
+                fromCache = true,
+            )
+        }
+        VpnLog.add("подписка из кэша: ${servers.size} серверов")
     }
 
     override fun onCleared() {
@@ -127,7 +157,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Loads everything for this device once; later network changes call [refresh]. */
     fun start(hwid: String) {
         attachDevice(hwid)
-        if (_state.value.raw.isNotBlank()) return
+        // Кэш мог уже наполнить состояние, но сеть всё равно нужна: проверяем,
+        // не обновлялись ли мы уже в этой сессии.
+        if (refreshed) return
+        refreshed = true
         refresh(ping = true)
     }
 
@@ -140,6 +173,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() {
         Api.logout()
         autoConnectAfterLogin = false
+        refreshed = false
+        runCatching { SubCache.clear(getApplication()) }
         _signedIn.value = false
         _state.value = SubscriptionState()
     }
@@ -221,9 +256,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     autoConnect = autoNow && picked.isNotBlank(),
                     loading = false,
                     error = null,
+                    fromCache = false,
                     notice = if (ping) it.notice else fresh,
                     noticeSeq = if (ping) it.noticeSeq else it.noticeSeq + 1,
                 )
+            }
+            // Сохраняем успешную подписку: при следующем запуске список серверов
+            // появится сразу, ещё до ответа сети.
+            withContext(Dispatchers.IO) {
+                val snapshot = _state.value
+                if (snapshot.raw.isNotBlank()) {
+                    runCatching { SubCache.save(getApplication(), result.plan, snapshot.raw, snapshot.selected) }
+                }
             }
             if (ping) {
                 result.nodes?.let { pingAll(it) }
