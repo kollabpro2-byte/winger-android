@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
 import pro.wingerapp.vpn.BuildConfig
@@ -98,6 +99,11 @@ internal fun HomeTab(
     // Масштаб шрифтов списка под ширину экрана; сжимается, если самое длинное
     // имя перестало влезать целиком.
     val listScale by rememberListScale(groups)
+
+    // Счётчики сессии — в одном месте: таймер в шапке и значения у бусинок
+    // читают одно и то же состояние. Обновление полей перерисовывает только те
+    // листовые элементы, которые их читают, а не весь экран.
+    val traffic = remember { TrafficState() }
 
     // ── один таймлайн на событие «подписка обновлена» ──────────────
     // Раньше текст и вспышка кнопки жили каждый своим таймером: вспышка
@@ -145,8 +151,8 @@ internal fun HomeTab(
         }
 
 
-        // Слот фиксированной высоты: строка проявляется, но место занято всегда.
-        TrafficSlot(on = on, intervalSec = trafficIntervalSec)
+        // Слот фиксированной высоты: в шапке остаётся только таймер сессии.
+        TrafficTimer(traffic, on = on, intervalSec = trafficIntervalSec)
 
         Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle)
 
@@ -162,8 +168,12 @@ internal fun HomeTab(
 
         // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
         Text(s[R.string.home_location], color = Caption, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+        // Линия под подписью: тот же стиль и ритм, что у линии под названием
+        // локации (2 dp, Line). Отступы: 13 dp сверху, 12 dp снизу (у строки).
+        Box(Modifier.fillMaxWidth().padding(top = 13.dp).height(2.dp).background(Line))
         LocationRow(
             place = place,
+            traffic = traffic,
             live = on,
             on = on,
         )
@@ -347,7 +357,7 @@ private fun StatsRow(days: String, devices: String, traffic: String) {
     Row(
         Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(18.dp))
             .background(Elev).border(1.dp, CardLine, RoundedCornerShape(18.dp))
-            .padding(vertical = 11.dp, horizontal = 2.dp),
+            .padding(vertical = 5.4.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // В светлой теме неоновые сиреневый и циан на белой карточке бледнеют.
@@ -475,7 +485,7 @@ private fun StatIcon(kind: StatKind, tint: Color) {
  * «Текущее местоположение» до названия равно расстоянию от названия до линии.
  */
 @Composable
-private fun LocationRow(place: String, live: Boolean, on: Boolean) {
+private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on: Boolean) {
     val s = rememberStrings()
     val hasChoice = place.isNotBlank()
     // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола. Анимация
@@ -503,7 +513,7 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
-            val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 9.sp)
+            val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 8.sp)
             if (hasChoice) {
                 // Голубой градиент по буквам. Первый стоп — Cyan, то есть ровно
                 // цвет надписи «WINGER» (в каждой теме свой), последний — locPeak.
@@ -559,9 +569,30 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
                 )
             }
         }
-        // Индикатор активности вместо пинга: три пакета летят вправо.
+        // Невидимая распорка, затем трафик по бокам от бусинок: отдано слева
+        // голубым, получено справа фиолетовым. Вся группа держится справа —
+        // название занимает всё оставшееся место (weight), но не заходит за распорку.
         if (hasChoice) {
-            Box(Modifier.padding(start = 10.dp)) { PacketsIndicator(live = live) }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "↑ " + fmtMb(traffic.upBytes),
+                color = Cyan,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.alpha(if (live) 1f else .6f),
+            )
+            Spacer(Modifier.width(6.dp))
+            PacketsIndicator(live = live)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "↓ " + fmtMb(traffic.downBytes),
+                color = Purple,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.alpha(if (live) 1f else .6f),
+            )
         }
     }
 }
@@ -626,7 +657,7 @@ private fun PacketsIndicator(live: Boolean) {
 }
 
 /** Период оборота бусинки по дорожке — 1.8 с, как в макете. */
-private const val PACKETS_PERIOD_NANOS = 1_800_000_000f
+private const val PACKETS_PERIOD_NANOS = 7_200_000_000f
 
 /** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления.
  *  В светлой теме он должен быть темнее: неоновый на сером не читается. */
@@ -634,21 +665,27 @@ private val NoticeCyan: Color
     get() = if (AppTheme.p.isLight) Color(0xFF0E7490) else Color(0xFF7FE3FF)
 
 /**
- * Строка «↑ / таймер / ↓» в собственном composable: счётчики тикают раз в секунду,
- * и раньше каждый тик перерисовывал весь экран вместе со списком нод. Теперь
- * перерисовывается только эта строка.
+ * Счётчики сессии: время работы и объём трафика. Живут в одном объекте, чтобы
+ * таймер в шапке и значения у бусинок читали одно и то же. Поля — Compose-состояния,
+ * поэтому обновление секунды перерисовывает только таймер, а не весь экран.
+ */
+private class TrafficState {
+    var elapsed by mutableStateOf("00:00:00")
+    var upBytes by mutableLongStateOf(0L)
+    var downBytes by mutableLongStateOf(0L)
+}
+
+/**
+ * Строка «↑ / таймер / ↓» → теперь только таймер по центру: цифры трафика
+ * переехали к бусинкам у текущей локации (как в макете).
  */
 @Composable
-private fun TrafficSlot(on: Boolean, intervalSec: Int) {
-    val zero = remember { "0 Б" }
-    var elapsed by remember { mutableStateOf("00:00:00") }
-    var up by remember { mutableStateOf(zero) }
-    var down by remember { mutableStateOf(zero) }
+private fun TrafficTimer(traffic: TrafficState, on: Boolean, intervalSec: Int) {
     val alpha by animateFloatAsState(if (on) 1f else 0f, tween(350), label = "traffic")
 
     LaunchedEffect(on, intervalSec) {
         if (!on) {
-            elapsed = "00:00:00"; up = zero; down = zero
+            traffic.elapsed = "00:00:00"; traffic.upBytes = 0L; traffic.downBytes = 0L
             return@LaunchedEffect
         }
         val startAt = System.currentTimeMillis()
@@ -662,7 +699,7 @@ private fun TrafficSlot(on: Boolean, intervalSec: Int) {
             val now = System.currentTimeMillis()
             val sec = ((now - startAt) / 1000).toInt()
             // Таймер тикает раз в секунду — он и есть «время работы».
-            elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
+            traffic.elapsed = "%02d:%02d:%02d".format(sec / 3600, sec / 60 % 60, sec % 60)
             // Счётчики — раз в intervalSec: чаще них меняются только шумы, а
             // каждое чтение TrafficStats будит процесс.
             if (now - lastTrafficAt >= intervalMs) {
@@ -671,8 +708,8 @@ private fun TrafficSlot(on: Boolean, intervalSec: Int) {
                 if (tun != null) {
                     val b = base
                     if (b == null) base = tun else {
-                        down = fmtBytes((tun.first - b.first).coerceAtLeast(0L))
-                        up = fmtBytes((tun.second - b.second).coerceAtLeast(0L))
+                        traffic.downBytes = (tun.first - b.first).coerceAtLeast(0L)
+                        traffic.upBytes = (tun.second - b.second).coerceAtLeast(0L)
                     }
                 }
             }
@@ -680,15 +717,24 @@ private fun TrafficSlot(on: Boolean, intervalSec: Int) {
         }
     }
 
-    Box(Modifier.fillMaxWidth().height(26.dp), contentAlignment = Alignment.CenterStart) {
-        if (on) Row(
-            Modifier.fillMaxWidth().alpha(alpha),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("↑ $up", color = if (AppTheme.p.isLight) Color(0xFF0F9D6B) else Color(0xFF7EE0B0), fontSize = 13.sp)
-            Text(elapsed, color = Muted, fontSize = 13.sp)
-            Text("↓ $down", color = if (AppTheme.p.isLight) Color(0xFF2563EB) else Color(0xFF9ECBFF), fontSize = 13.sp)
-        }
+    Box(Modifier.fillMaxWidth().height(22.dp), contentAlignment = Alignment.Center) {
+        if (on) Text(
+            traffic.elapsed,
+            color = Muted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.alpha(alpha),
+        )
+    }
+}
+
+/** Трафик у бусинок: МБ до 999, дальше ГБ. Как в макете — с запятой в дроби. */
+private fun fmtMb(bytes: Long): String {
+    val mb = bytes / 1048576.0
+    return when {
+        mb >= 999.0 -> String.format(Locale.US, "%.1f", mb / 1024).replace('.', ',') + " ГБ"
+        mb < 10.0 -> String.format(Locale.US, "%.1f", mb).replace('.', ',') + " МБ"
+        else -> "${Math.round(mb)} МБ"
     }
 }
 
@@ -785,7 +831,7 @@ private fun ServerRow(
             // Внутренние отступы — как в макете: 12 × --srv по горизонтали и
             // 6 × --srv по вертикали. Вертикальный уменьшен с 10 до 6: секция
             // стала ниже на ~15 %, а кегли остались прежними.
-            .padding(horizontal = (12f * scale).dp, vertical = (6f * scale).dp),
+            .padding(horizontal = (12f * scale).dp, vertical = (4.3f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Галочки нет: выбранная строка и так отличается заливкой, рамкой и
@@ -857,18 +903,28 @@ private fun trafficShort(sub: Sub?, s: Strings): String {
  * а не обрезается многоточием.
  */
 @Composable
+/**
+ * Подгоняет кегль имени по доступной ширине. Шаги: 14.25 → 8 sp с шагом 0.25,
+ * затем точная пропорция с полом 6.5 sp — чтобы последняя буква названия
+ * никогда не обрезалась, даже когда трафик справа занимает много места.
+ */
 private fun fitNameSize(text: String, available: Dp, max: TextUnit, min: TextUnit): TextUnit {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     return remember(text, available, max, min) {
+        fun width(size: TextUnit): Int = measurer.measure(
+            text = AnnotatedString(text),
+            style = TextStyle(fontFamily = WingerSans, fontSize = size, fontWeight = FontWeight.Bold),
+        ).size.width
+
         var size = max
-        while (size.value > min.value) {
-            val width = measurer.measure(
-                text = AnnotatedString(text),
-                style = TextStyle(fontFamily = WingerSans, fontSize = size, fontWeight = FontWeight.Bold),
-            ).size.width
-            if (with(density) { width.toDp() } <= available) break
-            size = (size.value - 0.5f).sp
+        while (size.value > min.value && with(density) { width(size).toDp() } > available) {
+            size = (size.value - 0.25f).sp
+        }
+        val w = with(density) { width(size).toDp() }
+        if (w > available && w.value > 0f) {
+            val exact = size.value * (available.value / w.value)
+            size = exact.coerceAtLeast(6.5f).sp
         }
         size
     }
