@@ -58,12 +58,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
 import pro.wingerapp.vpn.BuildConfig
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.ServerNode
+import pro.wingerapp.vpn.fmtBytes
 import pro.wingerapp.vpn.net.Sub
 import pro.wingerapp.vpn.tunTraffic
 
@@ -165,15 +165,9 @@ internal fun HomeTab(
             traffic = trafficShort(sub, s),
         )
 
-        // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
-        Text(s[R.string.home_location], color = Caption, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
-        // Линия под подписью: тот же стиль и ритм, что у линии под названием
-        // локации (2 dp, Line). Отступы: 13 dp сверху, 12 dp снизу (у строки).
-        Box(Modifier.fillMaxWidth().padding(top = 13.dp).height(2.dp).background(Line))
+        // Название текущей локации — сразу под кнопкой, по центру (макет v106).
         LocationRow(
             place = place,
-            traffic = traffic,
-            live = on,
             on = on,
         )
 
@@ -475,16 +469,12 @@ private fun StatIcon(kind: StatKind, tint: Color) {
 
 
 /**
- * Текущая локация — не карточка и не кнопка: строка с линией снизу.
- * Название залито голубым градиентом от цвета «WINGER», справа — индикатор
- * активности «пакеты» вместо числового пинга. Если сервер не выбран —
- * «Не выбрано» серым, без градиента и индикатора.
- *
- * Отступ сверху и снизу одинаковый (12 dp): расстояние от подписи
- * «Текущее местоположение» до названия равно расстоянию от названия до линии.
+ * Текущая локация — строка с линией снизу, название по центру. Стоит сразу под
+ * кнопкой с орлом: подписи раздела, индикатора активности и цифр трафика здесь
+ * больше нет — трафик вернулся в шапку экрана (как в макете v106).
  */
 @Composable
-private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on: Boolean) {
+private fun LocationRow(place: String, on: Boolean) {
     val s = rememberStrings()
     val hasChoice = place.isNotBlank()
     // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола. Анимация
@@ -502,16 +492,16 @@ private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on:
         }
     }
 
-    Row(
+    Box(
         // Линия рисуется СНАРУЖИ паддинга: drawBehind стоит до padding, поэтому
         // получает полную высоту строки и её нижний край — это и есть отступ
-        // 12 dp под названием. Если поменять местами, линия уедет вплотную к тексту.
+        // 12 dp под названием.
         Modifier.fillMaxWidth()
             .drawBehind { dividerBottom(Line, 2.dp) }
             .padding(top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        contentAlignment = Alignment.Center
     ) {
-        BoxWithConstraints(Modifier.weight(1f)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
             val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 8.sp)
             if (hasChoice) {
                 // Голубой градиент по буквам. Первый стоп — Cyan, то есть ровно
@@ -550,6 +540,8 @@ private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on:
                 androidx.compose.foundation.Canvas(
                     Modifier.fillMaxWidth().height(heightDp).graphicsLayer()
                 ) {
+                    // Название по центру: сдвигаем отрисовку на половину разницы ширин.
+                    val dx = ((size.width - layout.size.width) / 2f).coerceAtLeast(0f)
                     val x = -flow.value * size.width * 1.5f
                     drawText(
                         textLayoutResult = layout,
@@ -558,6 +550,7 @@ private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on:
                             start = Offset(x, 0f),
                             end = Offset(x + size.width * 2.5f, 0f),
                         ),
+                        topLeft = Offset(dx, 0f),
                     )
                 }
             } else {
@@ -565,99 +558,13 @@ private fun LocationRow(place: String, traffic: TrafficState, live: Boolean, on:
                     s[R.string.home_not_selected], color = Dim, fontSize = nameSize,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
-        // Невидимая распорка, затем трафик по бокам от бусинок: отдано слева
-        // голубым, получено справа фиолетовым. Вся группа держится справа —
-        // название занимает всё оставшееся место (weight), но не заходит за распорку.
-        if (hasChoice) {
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "↑ " + fmtMb(traffic.upBytes),
-                color = Cyan,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                modifier = Modifier.alpha(if (live) 1f else .6f),
-            )
-            Spacer(Modifier.width(6.dp))
-            PacketsIndicator(live = live)
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "↓ " + fmtMb(traffic.downBytes),
-                color = Purple,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                modifier = Modifier.alpha(if (live) 1f else .6f),
-            )
-        }
     }
 }
-
-/**
- * «Пакеты»: три точки цветов палитры летят слева направо по дорожке 34×10 dp.
- * Фиолетовый `#C084FC` (акцент локации), циан `#22D3EE` (цвет «WINGER»),
- * голубой `#7FB0FF` (иконка трафика). Края дорожки растворяются за счёт
- * прозрачности, поэтому точки появляются и уходят, а не обрезаются.
- *
- * Фаза движения хранится в состоянии и при выключении VPN просто перестаёт
- * увеличиваться — точки замирают там, где были, и после включения продолжают
- * путь с того же места. Раньше здесь был `snapTo(0f)`: анимация сбрасывалась,
- * и точки «телепортировались» в начало дорожки.
- */
-@Composable
-private fun PacketsIndicator(live: Boolean) {
-    val bright = listOf(Color(0xFFC084FC), Color(0xFF22D3EE), Color(0xFF7FB0FF))
-    val dimColor = Color(0xFF8A93A0)
-    // Плавное приглушение: цвет уходит в серый, яркость падает, но положение не меняется.
-    val dim by animateFloatAsState(if (live) 0f else 1f, tween(320), label = "packetsDim")
-    val colors = bright.map { lerp(it, dimColor, 0.55f * dim) }
-
-    var phase by remember { mutableFloatStateOf(0.12f) }
-    LaunchedEffect(live) {
-        if (!live) return@LaunchedEffect
-        var last = 0L
-        while (true) {
-            withFrameNanos { now ->
-                if (last != 0L) {
-                    phase = (phase + (now - last) / PACKETS_PERIOD_NANOS) % 1f
-                }
-                last = now
-            }
-        }
-    }
-
-    // graphicsLayer() даёт канвасу собственный слой: его перерисовка каждый кадр
-    // больше не заставляет перерисовывать всю главную (градиенты, карточки, тени).
-    androidx.compose.foundation.Canvas(
-        Modifier.size(width = 34.dp, height = 10.dp).graphicsLayer()
-    ) {
-        val dot = 4.dp.toPx()
-        val r = dot / 2f
-        for (i in 0..2) {
-            // Фазы 0.6 с при периоде 1.8 с — это треть пути: 0, 1/3, 2/3.
-            val t = (phase + i / 3f) % 1f
-            val cx = -dot + t * (size.width + dot)
-            // Края дорожки растворяют точку: появляется и уходит, а не обрезается.
-            val edge = when {
-                t < 0.18f -> t / 0.18f
-                t > 0.78f -> (1f - t) / 0.22f
-                else -> 1f
-            }
-            drawCircle(
-                color = colors[i].copy(alpha = edge * (1f - 0.45f * dim)),
-                radius = r,
-                center = Offset(cx, size.height / 2f),
-            )
-        }
-    }
-}
-
-/** Период оборота бусинки по дорожке — 1.8 с, как в макете. */
-private const val PACKETS_PERIOD_NANOS = 7_200_000_000f
-
 /** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления.
  *  В светлой теме он должен быть темнее: неоновый на сером не читается. */
 private val NoticeCyan: Color
@@ -717,23 +624,16 @@ private fun TrafficTimer(traffic: TrafficState, on: Boolean, intervalSec: Int) {
     }
 
     Box(Modifier.fillMaxWidth().height(22.dp), contentAlignment = Alignment.Center) {
-        if (on) Text(
-            traffic.elapsed,
-            color = Muted,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.alpha(alpha),
-        )
-    }
-}
-
-/** Трафик у бусинок: МБ до 999, дальше ГБ. Как в макете — с запятой в дроби. */
-private fun fmtMb(bytes: Long): String {
-    val mb = bytes / 1048576.0
-    return when {
-        mb >= 999.0 -> String.format(Locale.US, "%.1f", mb / 1024).replace('.', ',') + " ГБ"
-        mb < 10.0 -> String.format(Locale.US, "%.1f", mb).replace('.', ',') + " МБ"
-        else -> "${Math.round(mb)} МБ"
+        if (on) Row(
+            Modifier.fillMaxWidth().alpha(alpha),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Трафик вернулся в шапку: оба значения голубым, как «WINGER».
+            Text("↑ " + fmtBytes(traffic.upBytes), color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(traffic.elapsed, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text("↓ " + fmtBytes(traffic.downBytes), color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
