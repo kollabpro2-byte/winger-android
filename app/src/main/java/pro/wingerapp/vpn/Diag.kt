@@ -72,6 +72,12 @@ object Diag {
         logExitReasons30(ctx)
     }
 
+    /**
+     * История завершений процесса доступна с Android 11 (API 30).
+     * Аннотация нужна именно здесь: проверка версии стоит в [logExitReasons],
+     * и без неё lint считает вызовы API 30 ошибками сборки.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
     private fun logExitReasons30(ctx: Context) {
         try {
             val am = ctx.getSystemService(ActivityManager::class.java) ?: return

@@ -26,14 +26,10 @@
     <string name="home_orb_hint">включить</string>
     <string name="home_location">Текущее местоположение</string>
     <string name="home_not_selected">Не выбрано</string>
-    <string name="home_select_server">выберите сервер</string>
-    <string name="home_ping_ms">%1$d мс</string>
     <string name="home_days_left">осталось</string>
     <string name="home_devices_label">устройства</string>
     <string name="home_traffic_label">трафик</string>
-    <string name="home_devices">Устройства </string>
     <string name="home_devices_value">%1$d из %2$s</string>
-    <string name="home_traffic">    Трафик </string>
     <string name="home_loading">Загружаем подписку…</string>
     <string name="home_ping_none">нет</string>
     <string name="home_ping_unknown">н/д</string>
@@ -104,7 +100,6 @@
     <string name="acc_payment">ОПЛАТА</string>
     <string name="acc_renewal">ПРОДЛЕНИЕ</string>
     <string name="acc_days">дни</string>
-    <string name="acc_price">цена</string>
     <string name="acc_renew">Продлить</string>
     <string name="acc_pay_method">СПОСОБ ОПЛАТЫ</string>
     <string name="acc_error">ошибка</string>

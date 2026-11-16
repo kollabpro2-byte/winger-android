@@ -1,5 +1,6 @@
 package pro.wingerapp.vpn.net
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import org.json.JSONArray
@@ -13,9 +14,16 @@ import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
 
+@SuppressLint("StaticFieldLeak")
 object Api {
     const val BASE = "https://my.wingerapp.pro/api/v1"
     val cookies = CookieManager()
+
+    /**
+     * Application context — не утечка: живёт столько же, сколько процесс.
+     * Присваивается ровно один раз в [init] из `applicationContext`.
+     */
+    @SuppressLint("StaticFieldLeak")
     lateinit var app: Context
 
     /** Fired on the main thread when the panel answers 401: the UI must re-login. */

@@ -26,14 +26,10 @@
     <string name="home_orb_hint">turn on</string>
     <string name="home_location">Current location</string>
     <string name="home_not_selected">Not selected</string>
-    <string name="home_select_server">choose a server</string>
-    <string name="home_ping_ms">%1$d ms</string>
     <string name="home_days_left">left</string>
     <string name="home_devices_label">devices</string>
     <string name="home_traffic_label">traffic</string>
-    <string name="home_devices">Devices </string>
     <string name="home_devices_value">%1$d of %2$s</string>
-    <string name="home_traffic">    Traffic </string>
     <string name="home_loading">Loading the subscription…</string>
     <string name="home_ping_none">none</string>
     <string name="home_ping_unknown">n/a</string>
@@ -104,7 +100,6 @@
     <string name="acc_payment">PAYMENT</string>
     <string name="acc_renewal">RENEWAL</string>
     <string name="acc_days">days</string>
-    <string name="acc_price">price</string>
     <string name="acc_renew">Renew</string>
     <string name="acc_pay_method">PAYMENT METHOD</string>
     <string name="acc_error">error</string>

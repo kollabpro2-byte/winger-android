@@ -368,7 +368,7 @@ private fun VDivider() {
 }
 
 @Composable
-private fun Stat(mod: Modifier, kind: StatKind, tint: Color, bg: Color, label: String, value: String, unit: String? = null) {
+private fun Stat(modifier: Modifier, kind: StatKind, tint: Color, bg: Color, label: String, value: String, unit: String? = null) {
     // Значение делим на число и «хвост»: «436 дней» → «436» + мелкое «дней»,
     // «285 ГБ» → «285» + мелкое «ГБ». Если в хвосте есть цифры («2 из 3»),
     // не делим — иначе получилось бы «2» + «из 3» мелким.
@@ -378,7 +378,7 @@ private fun Stat(mod: Modifier, kind: StatKind, tint: Color, bg: Color, label: S
     val suffix = unit ?: tail?.takeIf { it.none { ch -> ch.isDigit() } }
     val whole = if (suffix == null) value.trim() else number
 
-    Row(mod.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(22.dp).clip(RoundedCornerShape(8.dp)).background(bg), contentAlignment = Alignment.Center) {
             StatIcon(kind, tint)
         }

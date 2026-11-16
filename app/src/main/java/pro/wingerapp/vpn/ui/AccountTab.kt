@@ -111,7 +111,7 @@ internal fun AccountTab(ctx: Context, hwid: String, onLogout: () -> Unit, onSupp
             }
         }
         if (note.isNotBlank()) Text(note, color = Color(0xFFF87171), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-            if (c.telegram == null) {
+        if (c.telegram == null) {
                 Section {
                     Text(s[R.string.acc_telegram], color = Caption, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                     Text(s[R.string.acc_telegram_hint], color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))

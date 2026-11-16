@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +23,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.graphics.toArgb
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.ui.HomeScreen
 import pro.wingerapp.vpn.ui.LoginScreen
@@ -92,6 +94,17 @@ class MainActivity : ComponentActivity() {
         // можно взять до первой композиции, без «перескока» оформления.
         pro.wingerapp.vpn.ui.AppTheme.mode =
             pro.wingerapp.vpn.ui.AppTheme.fromStored(Store.themeMode(this))
+        // Фон окна ещё до первого кадра Compose: система успевает показать его
+        // раньше, чем отрисуется заставка, поэтому нет вспышки белого или чёрного.
+        runCatching {
+            val p = pro.wingerapp.vpn.ui.AppTheme.p
+            window.setBackgroundDrawable(
+                GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(p.bgTop.toArgb(), p.bgBottom.toArgb()),
+                )
+            )
+        }
         VpnLog.setPeriodMinutes(Store.logClearMinutes(this))
         setContent {
             // Системные полосы подстраиваются под тему: в светлой нужны тёмные
@@ -132,7 +145,11 @@ class MainActivity : ComponentActivity() {
      * ANDROID_ID is stable per signing key, but it can be empty on some devices.
      * A shared constant would give every such device the same HWID (and the same
      * trial), so fall back to a hash of the build fingerprint instead.
+     *
+     * Идентификатор нужен именно как HWID подписки, поэтому «нерекомендуемый»
+     * способ здесь осознанный: он не содержит личных данных, только id установки.
      */
+    @android.annotation.SuppressLint("HardwareIds")
     private fun hwid(): String {
         val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
         if (!id.isNullOrBlank() && id.length >= 8) return id
