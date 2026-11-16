@@ -493,16 +493,14 @@ private fun LocationRow(place: String, on: Boolean) {
     }
 
     Box(
-        // Линия рисуется СНАРУЖИ паддинга: drawBehind стоит до padding, поэтому
-        // получает полную высоту строки и её нижний край — это и есть отступ
-        // 12 dp под названием.
+        // Линии под названием больше нет: строка отделяется только отступом.
+        // Сверху 16 dp — чуть больше воздуха от кнопки, снизу 12 dp до показателей.
         Modifier.fillMaxWidth()
-            .drawBehind { dividerBottom(Line, 2.dp) }
-            .padding(top = 12.dp, bottom = 12.dp),
+            .padding(top = 16.dp, bottom = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 14.25.sp, 8.sp)
+            val nameSize = fitNameSize(place.ifBlank { s[R.string.home_not_selected] }, maxWidth, 17.1.sp, 8.sp)
             if (hasChoice) {
                 // Голубой градиент по буквам. Первый стоп — Cyan, то есть ровно
                 // цвет надписи «WINGER» (в каждой теме свой), последний — locPeak.
