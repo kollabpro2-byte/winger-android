@@ -67,20 +67,76 @@ internal fun Seg(label: String, on: Boolean, modifier: Modifier, click: () -> Un
         Text(label, color = if (on) OnAccent else OnCard, fontSize = 12.sp)
     }
 }
+/**
+ * Карточка подписки, пока она грузится.
+ *
+ * Раньше это была синяя плашка, а подпись «Подписка в пути» стояла СНАРУЖИ, бледно-голубым
+ * на фоне экрана — в светлой теме она почти сливалась с фоном. Теперь карточка сразу в том же
+ * фиолетовом градиенте, что и загруженная (AccentBrush), а надпись — белая и внутри карточки:
+ * контраст не зависит от темы. Плюс спиннер и две «полоски-заготовки», чтобы было видно,
+ * что карточка наполняется.
+ */
 @Composable
 internal fun SubLoading() {
+    val s = rememberStrings()
+    val t by rememberInfiniteTransition(label = "subLoad").animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(2600, easing = LinearEasing)),
+        label = "subLoadShift",
+    )
     Box(
-        Modifier.fillMaxWidth().height(168.dp).clip(RoundedCornerShape(18.dp))
-            .background(Brush.linearGradient(listOf(Color(0xE65CBAFF), Color(0xB82E96E6))))
+        Modifier.fillMaxWidth().height(168.dp).clip(RoundedCornerShape(22.dp))
+            .background(AccentBrush)
     ) {
-        val t by rememberInfiniteTransition(label = "sky").animateFloat(0f, 1f, infiniteRepeatable(tween(3600, easing = LinearEasing)), label = "d")
+        // Мягкие блики, плывущие по карточке: движение есть, резких деталей нет.
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(Color.White.copy(.55f), 18.dp.toPx(), Offset(size.width * t, 46.dp.toPx()))
-            drawCircle(Color(0xFFF4F7FB), 8.dp.toPx(), Offset(size.width * ((t + 0.2f) % 1f), 70.dp.toPx()))
+            drawCircle(Color.White.copy(alpha = .10f), 46.dp.toPx(),
+                Offset(size.width * t, size.height * 0.30f))
+            drawCircle(Color.White.copy(alpha = .07f), 26.dp.toPx(),
+                Offset(size.width * ((t + 0.4f) % 1f), size.height * 0.72f))
+        }
+        Column(
+            Modifier.fillMaxSize().padding(18.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    s[R.string.sub_plan], color = Color.White.copy(alpha = .8f),
+                    fontSize = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold,
+                )
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = Color.White.copy(alpha = .9f),
+                    strokeWidth = 1.8.dp,
+                )
+            }
+            Text(
+                s[R.string.sub_loading], color = Color.White,
+                fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+            )
+            Column {
+                LoadBar(0.60f, 0.22f)
+                Spacer(Modifier.height(8.dp))
+                LoadBar(0.38f, 0.16f)
+            }
         }
     }
-    Text(rememberStrings()[R.string.sub_loading], color = Color(0xFFC5D7E6), modifier = Modifier.fillMaxWidth().padding(top = 14.dp), textAlign = TextAlign.Center)
 }
+
+/** Полоска-заготовка на карточке загрузки: показывает, где появятся данные. */
+@Composable
+private fun LoadBar(widthFraction: Float, alpha: Float) {
+    Box(
+        Modifier.fillMaxWidth(widthFraction).height(7.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.White.copy(alpha = alpha))
+    )
+}
+
 /**
  * Орёл как растр в исходном разрешении: 300×230, без масштабирования под
  * плотность экрана (`inScaled = false`).
