@@ -3,6 +3,7 @@ package pro.wingerapp.vpn.ui
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
@@ -16,8 +17,16 @@ import kotlin.math.roundToInt
  * толщина, прижатая к краю (а не к дробной середине), рисуется без
  * сглаживания — линия остаётся тонкой и чёткой на любой плотности.
  */
-internal fun DrawScope.hairlineBottom(color: Color) {
-    val stroke = 1.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
+/**
+ * Горизонтальная линия по нижнему краю области заданной толщины, прижатая к
+ * пиксельной сетке: 1.dp при плотности 2.75 — это 2.75 px, Compose такую линию
+ * сглаживает, и вместо разделителя получается серая полоска с размытыми краями.
+ */
+internal fun DrawScope.dividerBottom(color: Color, thickness: Dp) {
+    val stroke = thickness.toPx().roundToInt().coerceAtLeast(1).toFloat()
     val y = size.height - stroke / 2f
     drawLine(color, Offset(0f, y), Offset(size.width, y), stroke)
 }
+
+/** Тонкая линия в 1 экранный пиксель — частный случай [dividerBottom]. */
+internal fun DrawScope.hairlineBottom(color: Color) = dividerBottom(color, 1.dp)

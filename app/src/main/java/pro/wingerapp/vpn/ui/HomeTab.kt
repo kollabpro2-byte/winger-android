@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -159,16 +160,10 @@ internal fun HomeTab(
             traffic = trafficShort(sub, s),
         )
 
-        val pingMs = pings[place]
         // Подпись раздела — тем же кеглем, что заголовки групп серверов ниже.
         Text(s[R.string.home_location], color = Caption, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
         LocationRow(
             place = place,
-            ping = when {
-                place.isBlank() || !pings.containsKey(place) -> null
-                pingMs == null || pingMs == -1 -> s[R.string.home_ping_unknown]
-                else -> s.format(R.string.home_ping_ms, pingMs)
-            },
             live = on,
             on = on,
         )
@@ -309,13 +304,13 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
                         )
                     )
             )
-            // Орёл: при включении опускается сверху вниз к центру (36 dp).
-            // Целое число dp и FilterQuality.High: исходник 300×230 при
-            // плотности 2.75 уменьшается втрое, и на дефолтном (билинейном)
-            // фильтре контуры «плывут» — с высоким качеством остаются резкими.
+            // Орёл: при включении опускается сверху вниз к центру.
+            // Размер — как в утверждённом макете: там орёл занимает 30 % диаметра
+            // круга (42 px при круге 140). У нас круг 176 dp, поэтому 53 dp даёт
+            // ту же пропорцию, а не «мельче, чем в макете».
             Image(
                 bitmap = rememberEagle(), contentDescription = null,
-                modifier = Modifier.size(36.dp).graphicsLayer {
+                modifier = Modifier.size(53.dp).graphicsLayer {
                     alpha = lit
                     translationY = eagleDrop * density
                 },
@@ -375,12 +370,14 @@ private fun Stat(mod: Modifier, kind: StatKind, tint: Color, bg: Color, label: S
     val suffix = unit ?: tail?.takeIf { it.none { ch -> ch.isDigit() } }
     val whole = if (suffix == null) value.trim() else number
 
-    Row(mod.padding(horizontal = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(26.dp).clip(RoundedCornerShape(9.dp)).background(bg), contentAlignment = Alignment.Center) {
+    Row(mod.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(22.dp).clip(RoundedCornerShape(8.dp)).background(bg), contentAlignment = Alignment.Center) {
             StatIcon(kind, tint)
         }
-        Column(Modifier.padding(start = 9.dp).weight(1f)) {
-            Text(label, color = Muted, fontSize = 9.sp, letterSpacing = .6.sp, maxLines = 1, overflow = TextOverflow.Clip)
+        Column(Modifier.padding(start = 6.dp).weight(1f)) {
+            // Подписи крупнее на 30 % (9 → 11.7 sp), разрядка убрана: иначе
+            // «устройства» не влезает и подгонка уменьшала бы всю ячейку.
+            Text(label, color = Muted, fontSize = 11.7.sp, letterSpacing = .1.sp, maxLines = 1, overflow = TextOverflow.Clip)
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 // Кегль подбирается по ширине ячейки: на узких экранах и при
                 // крупных числах значение уменьшается, а не обрезается.
@@ -430,7 +427,7 @@ private fun fitValueSize(number: String, suffix: String?, available: Dp, max: Te
 /** Значки рисуются на Canvas: без внешних иконок и лишних зависимостей. */
 @Composable
 private fun StatIcon(kind: StatKind, tint: Color) {
-    androidx.compose.foundation.Canvas(Modifier.size(15.dp)) {
+    androidx.compose.foundation.Canvas(Modifier.size(13.dp)) {
         val w = size.width
         val h = size.height
         val sw = 1.6.dp.toPx()
@@ -461,13 +458,16 @@ private fun StatIcon(kind: StatKind, tint: Color) {
 
 
 /**
- * Текущая локация — не карточка и не кнопка: строка с тонкой линией снизу.
- * Название залито градиентом из палитры орла (бирюза → синий → пурпур) и
- * «течёт» в такт его свечению (3.7 с). Если сервер не выбран — «Не выбрано»
- * серым, без градиента и анимации.
+ * Текущая локация — не карточка и не кнопка: строка с линией снизу.
+ * Название залито голубым градиентом от цвета «WINGER», справа — индикатор
+ * активности «пакеты» вместо числового пинга. Если сервер не выбран —
+ * «Не выбрано» серым, без градиента и индикатора.
+ *
+ * Отступ сверху и снизу одинаковый (12 dp): расстояние от подписи
+ * «Текущее местоположение» до названия равно расстоянию от названия до линии.
  */
 @Composable
-private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean) {
+private fun LocationRow(place: String, live: Boolean, on: Boolean) {
     val s = rememberStrings()
     val hasChoice = place.isNotBlank()
     // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола.
@@ -479,8 +479,8 @@ private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean
     )
 
     Row(
-        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp)
-            .drawBehind { hairlineBottom(Line) },
+        Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp)
+            .drawBehind { dividerBottom(Line, 2.dp) },
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
@@ -525,21 +525,66 @@ private fun LocationRow(place: String, ping: String?, live: Boolean, on: Boolean
                 )
             }
         }
-        // Пинг — справа от названия, в той же строке.
-        Row(
-            Modifier.padding(start = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                Modifier.size(7.dp).clip(CircleShape)
-                    .background(
-                        if (live) (if (AppTheme.p.isLight) Color(0xFF0FA85A) else Color(0xFF3DFF7A))
-                        else (if (AppTheme.p.isLight) Color(0xFF8296AA) else Color(0xFF5A6A7E))
-                    )
-            )
-            if (hasChoice) Text(
-                ping ?: "—", color = if (AppTheme.p.isLight) Color(0xFF2F4A5E) else Color(0xFF9FE6F7),
-                fontSize = 8.25.sp, modifier = Modifier.padding(start = 6.dp),
+        // Индикатор активности вместо пинга: три пакета летят вправо.
+        if (hasChoice) {
+            Box(Modifier.padding(start = 10.dp)) { PacketsIndicator(live = live) }
+        }
+    }
+}
+
+/**
+ * «Пакеты»: три точки цветов палитры летят слева направо по дорожке 34×10 dp.
+ * Фиолетовый `#C084FC` (акцент локации), циан `#22D3EE` (цвет «WINGER»),
+ * голубой `#7FB0FF` (иконка трафика). Края дорожки растворяются за счёт
+ * прозрачности, поэтому точки появляются и уходят, а не обрезаются.
+ *
+ * Пока VPN выключен, движение останавливается, а цвета приглушаются: «летящие
+ * пакеты» при отключённом туннеле были бы враньём.
+ */
+@Composable
+private fun PacketsIndicator(live: Boolean) {
+    val bright = listOf(Color(0xFFC084FC), Color(0xFF22D3EE), Color(0xFF7FB0FF))
+    val dim = Color(0xFF8A93A0)
+    val colors = bright.map { if (live) it else lerp(it, dim, 0.55f) }
+
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(live) {
+        if (!live) {
+            progress.snapTo(0f)
+            return@LaunchedEffect
+        }
+        progress.snapTo(0f)
+        progress.animateTo(
+            1f,
+            infiniteRepeatable(tween(1800, easing = LinearEasing)),
+        )
+    }
+
+    androidx.compose.foundation.Canvas(Modifier.size(width = 34.dp, height = 10.dp)) {
+        val dot = 4.dp.toPx()
+        val r = dot / 2f
+        // Замершие позиции при выключенном VPN: 6 / 13 / 20 dp по левому краю точки.
+        val frozen = listOf(6.dp.toPx() + r, 13.dp.toPx() + r, 20.dp.toPx() + r)
+        for (i in 0..2) {
+            val cx: Float
+            val alpha: Float
+            if (live) {
+                // Фазы 0.6 с при периоде 1.8 с — это треть пути: 0, 1/3, 2/3.
+                val t = (progress.value + i / 3f) % 1f
+                cx = -dot + t * (size.width + dot)
+                alpha = when {
+                    t < 0.18f -> t / 0.18f
+                    t > 0.78f -> (1f - t) / 0.22f
+                    else -> 1f
+                }
+            } else {
+                cx = frozen[i]
+                alpha = 0.85f - i * 0.15f
+            }
+            drawCircle(
+                color = colors[i].copy(alpha = (if (live) 1f else 0.6f) * alpha),
+                radius = r,
+                center = Offset(cx, size.height / 2f),
             )
         }
     }
