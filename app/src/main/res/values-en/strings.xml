@@ -73,6 +73,10 @@
     <string name="set_core_log_hint">Needed to find out why there is no connection</string>
     <string name="set_bypass">NO TUNNEL</string>
     <string name="set_bypass_hint">These domains go straight out, around the VPN</string>
+    <string name="set_bg">Background &amp; battery</string>
+    <string name="set_bg_hint">ROMs like HyperOS kill the VPN while the screen is off. Allow background work to keep the tunnel alive.</string>
+    <string name="set_bg_action">Allow</string>
+    <string name="set_bg_done">Allowed: the system will keep the VPN alive</string>
     <string name="set_add">add</string>
     <string name="set_remove">remove</string>
     <string name="set_log">LOG</string>

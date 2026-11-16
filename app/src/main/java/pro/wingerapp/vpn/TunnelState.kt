@@ -17,10 +17,33 @@ object TunnelState {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** Restore the persisted flag after a process restart. */
+    /**
+     * Жив ли наш сервис туннеля в этом процессе. Система может убить сервис,
+     * не вызвав `onDestroy` (HyperOS так делает при выключении экрана), и тогда
+     * сохранённый флаг остаётся `true` — интерфейс показывал «включено», хотя
+     * значка VPN уже нет. Проверяем реальность, а не только флаг.
+     */
+    @Volatile
+    var serviceAlive: Boolean = false
+
+    /** Идёт восстановление туннеля после того, как систему его убила. */
+    @Volatile
+    var restoring: Boolean = false
+
+    /** Restore the persisted flag after a process restart, but only if the service is alive. */
     fun sync(ctx: Context) {
-        _running.value = Store.running(ctx)
+        val persisted = Store.running(ctx)
+        if (persisted && !serviceAlive) {
+            // Флаг устарел: сервиса нет. Сбрасываем, чтобы не врать пользователю.
+            Store.running(ctx, false)
+            _running.value = false
+            return
+        }
+        _running.value = persisted
     }
+
+    /** Устаревший флаг «включено»: сервиса нет, но в настройках записано обратное. */
+    fun looksStale(ctx: Context): Boolean = Store.running(ctx) && !serviceAlive
 
     fun on() {
         _error.value = null

@@ -159,6 +159,36 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
             }
         }
 
+        SettingsSection(s[R.string.set_bg], "bg" in open, onToggle = { toggle("bg") }) {
+            Text(s[R.string.set_bg_hint], color = Muted, fontSize = 11.sp)
+            val power = ctx.getSystemService(android.os.PowerManager::class.java)
+            val exempt = power?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+            Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (exempt) s[R.string.set_bg_done] else "",
+                    color = if (exempt) Purple else Muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                if (!exempt) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(12.dp)).background(Purple.copy(alpha = .22f))
+                            .clickable {
+                                runCatching {
+                                    ctx.startActivity(
+                                        android.content.Intent(
+                                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            android.net.Uri.parse("package:${ctx.packageName}"),
+                                        )
+                                    )
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                    ) { Text(s[R.string.set_bg_action], color = OnAccent, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        }
+
         SettingsSection(s[R.string.set_bypass], "bypass" in open, onToggle = { toggle("bypass") }) {
             Text(s[R.string.set_bypass_hint], color = Muted, fontSize = 11.sp)
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

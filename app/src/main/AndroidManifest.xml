@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Просим исключение из оптимизации батареи: HyperOS и другие прошивки
+         убивают сервис туннеля при выключенном экране, и VPN отваливается. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />

@@ -51,6 +51,11 @@ class WingerVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Помечаем себя живым ДО sync(): иначе sync увидит «флаг есть, сервиса нет»
+        // и сбросит состояние сразу после старта.
+        TunnelState.serviceAlive = true
+        // Сервис поднялся — снимаем флаг «идёт восстановление».
+        TunnelState.restoring = false
         VpnLog.init(this)
         CrashGuard.install()
         TunnelState.sync(this)
@@ -108,6 +113,7 @@ class WingerVpnService : VpnService() {
         generation.incrementAndGet()
         stopCore()
         Store.running(this, false)
+        TunnelState.serviceAlive = false
         TunnelState.off()
         stopForeground(STOP_FOREGROUND_REMOVE)
         VpnLog.add("сервис уничтожен")

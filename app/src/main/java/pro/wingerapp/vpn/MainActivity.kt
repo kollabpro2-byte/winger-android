@@ -127,6 +127,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Возврат из фона: сервис мог быть убит системой (HyperOS убивает его при
+     * выключенном экране, не вызывая `onDestroy`). Тогда сохранённый флаг
+     * «включено» устарел, и приложение показывало орла и «ВКЛ», хотя значка VPN
+     * в статус-баре уже не было. Либо восстанавливаем туннель тем же конфигом,
+     * либо честно переводим состояние в «выключено».
+     */
+    override fun onResume() {
+        super.onResume()
+        if (TunnelState.serviceAlive) {
+            TunnelState.sync(this)
+            return
+        }
+        val cfg = Store.lastConfig(this)
+        if (Store.running(this) && cfg.isNotBlank() && !TunnelState.restoring) {
+            TunnelState.restoring = true
+            VpnLog.add("восстановление туннеля: сервис был убит системой")
+            connect(cfg)
+            return
+        }
+        TunnelState.sync(this)
+    }
+
     /** Статус-бар и навигация в цвет темы (Compose сам их не перекрашивает). */
     private fun applySystemBars() {
         val palette = pro.wingerapp.vpn.ui.AppTheme.p
