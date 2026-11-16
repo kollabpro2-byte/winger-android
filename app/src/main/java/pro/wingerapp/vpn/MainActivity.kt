@@ -77,10 +77,12 @@ class MainActivity : ComponentActivity() {
         Diag.harvestCoreLog(this, rotate = true)
         Diag.logExitReasons(this)
         VpnLog.add("app start")
-        pro.wingerapp.vpn.net.Api.init(this)
+        // Api.init() и проверка сессии переехали в AppViewModel.bootstrap():
+        // они читают зашифрованный файл, а это поднимает Keystore. На главном
+        // потоке это давало 100–300 мс до первого кадра.
         TunnelState.sync(this)
-        // Тема из настроек до первой композиции: иначе экран на мгновение
-        // отрисуется в средней теме и «перескочит».
+        // Настройки теперь в обычном файле — читаются мгновенно, поэтому тему
+        // можно взять до первой композиции, без «перескока» оформления.
         pro.wingerapp.vpn.ui.AppTheme.mode =
             pro.wingerapp.vpn.ui.AppTheme.fromStored(Store.themeMode(this))
         VpnLog.setPeriodMinutes(Store.logClearMinutes(this))
@@ -140,16 +142,19 @@ fun AppRoot(
     disconnect: () -> Unit,
 ) {
     val signedIn by vm.signedIn.collectAsState()
+    val ready by vm.ready.collectAsState()
     // Registration and the subscription both go out with the device id, and the
     // login screen runs before the home screen ever starts loading.
     LaunchedEffect(hwid) { vm.attachDevice(hwid) }
     // Inter вместо системного шрифта: настоящие веса и одинаковые метрики на
     // любой прошивке (см. Fonts.kt). Оборачиваем весь интерфейс, включая вход.
     pro.wingerapp.vpn.ui.WingerFonts {
-        if (!signedIn) {
-            LoginScreen(vm, ctx, hwid, disconnect) { vm.signedIn() }
-        } else {
-            HomeScreen(vm, hwid, connect, disconnect, onLogout = {
+        when {
+            // Пока проверяется сессия в зашифрованном файле — показываем заставку.
+            // Это быстрее и приятнее, чем мигнуть экраном входа и «перескочить».
+            !ready -> pro.wingerapp.vpn.ui.Splash()
+            !signedIn -> LoginScreen(vm, ctx, hwid, disconnect) { vm.signedIn() }
+            else -> HomeScreen(vm, hwid, connect, disconnect, onLogout = {
                 disconnect()
                 TunnelState.clearError()
             })

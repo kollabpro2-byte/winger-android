@@ -68,8 +68,16 @@ data class SubscriptionState(
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val _signedIn = MutableStateFlow(Api.hasSession())
+    private val _signedIn = MutableStateFlow(false)
     val signedIn: StateFlow<Boolean> = _signedIn.asStateFlow()
+
+    /**
+     * Готовность к показу интерфейса. Пока false — показываем заставку.
+     * Сессия лежит в зашифрованном файле, а его чтение поднимает Keystore
+     * (100–300 мс), поэтому проверка идёт в фоне, а не в onCreate.
+     */
+    private val _ready = MutableStateFlow(false)
+    val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
     private val _state = MutableStateFlow(SubscriptionState())
     val state: StateFlow<SubscriptionState> = _state.asStateFlow()
@@ -86,6 +94,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // A 401 from the panel means the cookie expired: show the login screen
         // instead of claiming the account has no subscription.
         Api.onUnauthorized = { _signedIn.value = false }
+        bootstrap()
+    }
+
+    /**
+     * Первый шаг после запуска: читаем сессию из зашифрованного файла и переносим
+     * настройки в обычный. Всё это в фоне — Keystore на главном потоке давал
+     * заметную задержку первого кадра.
+     */
+    private fun bootstrap() {
+        viewModelScope.launch {
+            val ctx = getApplication<Application>()
+            withContext(Dispatchers.IO) {
+                runCatching { Api.init(ctx) }
+                runCatching { Store.migrateSettingsIntoPlain(ctx) }
+            }
+            _signedIn.value = withContext(Dispatchers.IO) { runCatching { Api.hasSession() }.getOrDefault(false) }
+            _ready.value = true
+        }
     }
 
     override fun onCleared() {

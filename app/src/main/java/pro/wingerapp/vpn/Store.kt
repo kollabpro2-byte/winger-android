@@ -13,17 +13,42 @@ import androidx.security.crypto.EncryptedSharedPreferences
  */
 object Store {
     private const val SECURE_FILE = "winger_secure"
+    private const val UI_FILE = "winger_ui"
     private const val LEGACY_FILE = "winger"
     private const val MASTER_KEY = "winger_master_key"
 
+    /**
+     * Только то, что действительно секрет: сессия, логин/пароль и последний
+     * конфиг туннеля (в нём ключи сервера). Всё остальное — настройки интерфейса,
+     * и держать их в зашифрованном файле незачем: каждое обращение к нему
+     * поднимает Android Keystore, а это 100–300 мс на холодном старте.
+     */
+    private val SECRET_KEYS = setOf("cookies", "login", "password", "lastConfig")
+
     @Volatile
-    private var cached: SharedPreferences? = null
+    private var uiCache: SharedPreferences? = null
+
+    @Volatile
+    private var secretCache: SharedPreferences? = null
+
+    /** Настройки интерфейса: обычный файл, читается мгновенно. */
+    private fun prefs(ctx: Context): SharedPreferences? {
+        uiCache?.let { return it }
+        synchronized(this) {
+            uiCache?.let { return it }
+            val app = ctx.applicationContext
+            val p = runCatching { app.getSharedPreferences(UI_FILE, Context.MODE_PRIVATE) }.getOrNull()
+            if (p != null) migrateLegacy(app, p)
+            uiCache = p
+            return p
+        }
+    }
 
     @Suppress("DEPRECATION")
-    private fun prefs(ctx: Context): SharedPreferences? {
-        cached?.let { return it }
+    private fun secure(ctx: Context): SharedPreferences? {
+        secretCache?.let { return it }
         synchronized(this) {
-            cached?.let { return it }
+            secretCache?.let { return it }
             val app = ctx.applicationContext
             val secure = runCatching {
                 EncryptedSharedPreferences.create(
@@ -34,17 +59,43 @@ object Store {
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
                 )
             }.onFailure {
-                VpnLog.add("secure prefs недоступны, откат на обычные: ${it.javaClass.simpleName}: ${it.message}")
+                VpnLog.add("secure prefs недоступны: ${it.javaClass.simpleName}: ${it.message}")
             }.getOrNull()
-            if (secure != null) migrate(app, secure)
-            val chosen = secure ?: app.getSharedPreferences(LEGACY_FILE, Context.MODE_PRIVATE)
-            cached = chosen
-            return chosen
+            secretCache = secure
+            return secure
         }
     }
 
+    /**
+     * Переносит настройки из старого шифрованного файла в обычный. Вызывается из
+     * фоновой инициализации, а не из onCreate: создание зашифрованного файла само
+     * обращается к Keystore.
+     */
+    fun migrateSettingsIntoPlain(ctx: Context) {
+        val secure = runCatching { secure(ctx) }.getOrNull() ?: return
+        val ui = prefs(ctx) ?: return
+        val movable = runCatching { secure.all }.getOrNull()
+            ?.filterKeys { it !in SECRET_KEYS }.orEmpty()
+        if (movable.isEmpty()) return
+        val toUi = ui.edit()
+        val fromSecure = secure.edit()
+        movable.forEach { (key, value) ->
+            when (value) {
+                is String -> toUi.putString(key, value)
+                is Boolean -> toUi.putBoolean(key, value)
+                is Int -> toUi.putInt(key, value)
+                is Long -> toUi.putLong(key, value)
+                is Float -> toUi.putFloat(key, value)
+            }
+            fromSecure.remove(key)
+        }
+        toUi.apply()
+        fromSecure.apply()
+        VpnLog.add("настройки перенесены в обычный файл: ${movable.size}")
+    }
+
     /** Copy values from the old plaintext file once, then wipe it. */
-    private fun migrate(ctx: Context, target: SharedPreferences) {
+    private fun migrateLegacy(ctx: Context, target: SharedPreferences) {
         val legacy = runCatching { ctx.getSharedPreferences(LEGACY_FILE, Context.MODE_PRIVATE) }.getOrNull() ?: return
         val values = legacy.all
         if (values.isEmpty()) return
@@ -66,31 +117,41 @@ object Store {
         p.edit().apply(block).apply()
     }
 
+    private fun writeSecret(ctx: Context, block: SharedPreferences.Editor.() -> Unit) {
+        val p = runCatching { secure(ctx) }.getOrNull() ?: return
+        p.edit().apply(block).apply()
+    }
+
     private fun text(ctx: Context, key: String, fallback: String = ""): String =
         prefs(ctx)?.getString(key, fallback).orEmpty()
 
+    private fun secretText(ctx: Context, key: String): String =
+        runCatching { secure(ctx)?.getString(key, "") }.getOrNull().orEmpty()
+
     // --- credentials -----------------------------------------------------------------
 
-    fun save(ctx: Context, login: String, password: String) = write(ctx) {
+    fun save(ctx: Context, login: String, password: String) = writeSecret(ctx) {
         putString("login", login)
         putString("password", password)
     }
 
-    fun login(ctx: Context) = text(ctx, "login")
+    fun login(ctx: Context) = secretText(ctx, "login")
 
-    fun password(ctx: Context) = text(ctx, "password")
+    fun password(ctx: Context) = secretText(ctx, "password")
 
-    fun cookies(ctx: Context) = text(ctx, "cookies")
+    fun cookies(ctx: Context) = secretText(ctx, "cookies")
 
-    fun cookies(ctx: Context, raw: String) = write(ctx) { putString("cookies", raw) }
+    fun cookies(ctx: Context, raw: String) = writeSecret(ctx) { putString("cookies", raw) }
 
     /** Drop the session, keep the settings. */
-    fun logout(ctx: Context) = write(ctx) {
-        remove("login")
-        remove("password")
-        remove("cookies")
-        remove("lastConfig")
-        putBoolean("running", false)
+    fun logout(ctx: Context) {
+        writeSecret(ctx) {
+            remove("login")
+            remove("password")
+            remove("cookies")
+            remove("lastConfig")
+        }
+        write(ctx) { putBoolean("running", false) }
     }
 
     // --- tunnel ----------------------------------------------------------------------
@@ -100,11 +161,11 @@ object Store {
     fun running(ctx: Context, on: Boolean) = write(ctx) { putBoolean("running", on) }
 
     /** Last applied sing-box config, so a sticky restart does not lose the tunnel. */
-    fun lastConfig(ctx: Context) = text(ctx, "lastConfig")
+    fun lastConfig(ctx: Context) = secretText(ctx, "lastConfig")
 
-    fun lastConfig(ctx: Context, json: String) = write(ctx) { putString("lastConfig", json) }
+    fun lastConfig(ctx: Context, json: String) = writeSecret(ctx) { putString("lastConfig", json) }
 
-    fun clearLastConfig(ctx: Context) = write(ctx) { remove("lastConfig") }
+    fun clearLastConfig(ctx: Context) = writeSecret(ctx) { remove("lastConfig") }
 
     // --- settings --------------------------------------------------------------------
 
