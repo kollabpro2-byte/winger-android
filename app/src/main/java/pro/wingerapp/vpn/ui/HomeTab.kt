@@ -155,6 +155,12 @@ internal fun HomeTab(
 
         Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle)
 
+        // Название текущей локации — сразу под кнопкой, по центру (макет v106).
+        LocationRow(
+            place = place,
+            on = on,
+        )
+
         StatsRow(
             days = daysUntil(sub?.expires)?.let { s.quantity(R.plurals.days, it) } ?: s[R.string.fmt_none],
             devices = s.format(
@@ -163,12 +169,6 @@ internal fun HomeTab(
                 if ((sub?.devices ?: 0) <= 0) "∞" else sub!!.devices.toString()
             ),
             traffic = trafficShort(sub, s),
-        )
-
-        // Название текущей локации — сразу под кнопкой, по центру (макет v106).
-        LocationRow(
-            place = place,
-            on = on,
         )
 
         err?.let {
