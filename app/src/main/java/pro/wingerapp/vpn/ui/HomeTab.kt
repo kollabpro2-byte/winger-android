@@ -1,7 +1,6 @@
 package pro.wingerapp.vpn.ui
 
 import android.content.Context
-import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -27,7 +26,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -242,20 +240,28 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
     val border = lerp(Color(0x59FFFFFF), Cyan.copy(alpha = .9f), lit)
     val borderWidth = 3f + 1.5f * lit
     // Ореол «дышит» в такт с градиентом названия: 3.7 с, пик на половине цикла.
-    // Амплитуда глубже, чем раньше (0.44…1 и 0.92…1.08): свечение должно читаться
-    // сразу, не приглядываясь.
-    val breath = rememberInfiniteTransition(label = "breath")
-    val breathAlpha by breath.animateFloat(
-        0.44f, 1f,
-        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "breathAlpha",
-    )
-    val breathScale by breath.animateFloat(
-        0.92f, 1.08f,
-        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "breathScale",
-    )
-    val glow by animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
+    // Держим состояние, а читаем его ВНУТРИ graphicsLayer: тогда обновление идёт
+    // в фазе отрисовки и не вызывает перекомпоновку всего экрана каждый кадр.
+    // Пока VPN выключен, анимация не создаётся вовсе — свечения всё равно не видно.
+    val breathAlpha: State<Float>
+    val breathScale: State<Float>
+    if (on) {
+        val breath = rememberInfiniteTransition(label = "breath")
+        breathAlpha = breath.animateFloat(
+            0.44f, 1f,
+            infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "breathAlpha",
+        )
+        breathScale = breath.animateFloat(
+            0.92f, 1.08f,
+            infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "breathScale",
+        )
+    } else {
+        breathAlpha = remember { mutableFloatStateOf(1f) }
+        breathScale = remember { mutableFloatStateOf(1f) }
+    }
+    val glow = animateFloatAsState(if (on) 1f else 0f, tween(2400), label = "glow")
 
     Box(Modifier.fillMaxWidth().height(190.dp).padding(top = 6.dp), contentAlignment = Alignment.Center) {
         Box(
@@ -279,27 +285,27 @@ private fun Orb(on: Boolean, hint: String, onToggle: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             // Свечение из центра: мягкое пятно, «дышит» при включении.
-            // На API 31+ дополнительно размывается по-настоящему: градиент с
-            // альфой на OLED даёт ступеньки (бандинг), размытие их убирает.
+            // Раньше здесь было ещё Modifier.blur(12.dp): настоящая размывка
+            // 164-dp слоя на каждом кадре. На телефоне это загружало GPU так,
+            // что интерфейс переставал отзываться на нажатия. Вернулись к
+            // градиенту с большим числом стопов — он мягкий и почти бесплатный.
             Box(
                 Modifier.matchParentSize().padding(6.dp)
                     .graphicsLayer {
-                        alpha = glow * breathAlpha
-                        scaleX = breathScale
-                        scaleY = breathScale
+                        alpha = glow.value * breathAlpha.value
+                        scaleX = breathScale.value
+                        scaleY = breathScale.value
                     }
-                    .then(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                            Modifier.blur(12.dp) else Modifier
-                    )
                     .background(
-                        // Альфы 0.52 / 0.20 и радиус до 74 %: ореол ярче, чем раньше
-                        // (было 0.36 / 0.12) — свечение видно сразу в пике такта.
+                        // Пять стопов вместо трёх: мягкий спад без настоящего blur,
+                        // поэтому ступенек на OLED почти не видно, а стоит дёшево.
                         Brush.radialGradient(
                             *arrayOf(
                                 0f to Color(0x8522D3EE),
-                                0.44f to Color(0x3322D3EE),
-                                0.74f to Color(0x0022D3EE),
+                                0.30f to Color(0x5C22D3EE),
+                                0.50f to Color(0x3D22D3EE),
+                                0.64f to Color(0x1422D3EE),
+                                0.78f to Color(0x0022D3EE),
                             )
                         )
                     )
@@ -470,13 +476,20 @@ private fun StatIcon(kind: StatKind, tint: Color) {
 private fun LocationRow(place: String, live: Boolean, on: Boolean) {
     val s = rememberStrings()
     val hasChoice = place.isNotBlank()
-    // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола.
-    val flow = rememberInfiniteTransition(label = "flow")
-    val shift by flow.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(1850, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "shift",
-    )
+    // Сдвиг градиента: тот же период 3.7 с, что у «дыхания» ореола. Анимация
+    // живёт только при включённом VPN: иначе она будила бы перерисовку кадра
+    // постоянно и на телефоне это съедало отзывчивость интерфейса.
+    val flow = remember { Animatable(0f) }
+    LaunchedEffect(on) {
+        if (!on) {
+            flow.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            flow.animateTo(1f, tween(1850, easing = FastOutSlowInEasing))
+            flow.animateTo(0f, tween(1850, easing = FastOutSlowInEasing))
+        }
+    }
 
     Row(
         // Линия рисуется СНАРУЖИ паддинга: drawBehind стоит до padding, поэтому
@@ -505,7 +518,7 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
                     1.00f to peak,
                 )
                 val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-                val animated = if (on) shift else 0f
+                val animated = flow.value
                 val x = -animated * widthPx * 1.5f
                 Text(
                     place,
@@ -569,7 +582,11 @@ private fun PacketsIndicator(live: Boolean) {
         }
     }
 
-    androidx.compose.foundation.Canvas(Modifier.size(width = 34.dp, height = 10.dp)) {
+    // graphicsLayer() даёт канвасу собственный слой: его перерисовка каждый кадр
+    // больше не заставляет перерисовывать всю главную (градиенты, карточки, тени).
+    androidx.compose.foundation.Canvas(
+        Modifier.size(width = 34.dp, height = 10.dp).graphicsLayer()
+    ) {
         val dot = 4.dp.toPx()
         val r = dot / 2f
         for (i in 0..2) {
