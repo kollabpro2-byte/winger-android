@@ -538,57 +538,57 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
  * голубой `#7FB0FF` (иконка трафика). Края дорожки растворяются за счёт
  * прозрачности, поэтому точки появляются и уходят, а не обрезаются.
  *
- * Пока VPN выключен, движение останавливается, а цвета приглушаются: «летящие
- * пакеты» при отключённом туннеле были бы враньём.
+ * Фаза движения хранится в состоянии и при выключении VPN просто перестаёт
+ * увеличиваться — точки замирают там, где были, и после включения продолжают
+ * путь с того же места. Раньше здесь был `snapTo(0f)`: анимация сбрасывалась,
+ * и точки «телепортировались» в начало дорожки.
  */
 @Composable
 private fun PacketsIndicator(live: Boolean) {
     val bright = listOf(Color(0xFFC084FC), Color(0xFF22D3EE), Color(0xFF7FB0FF))
-    val dim = Color(0xFF8A93A0)
-    val colors = bright.map { if (live) it else lerp(it, dim, 0.55f) }
+    val dimColor = Color(0xFF8A93A0)
+    // Плавное приглушение: цвет уходит в серый, яркость падает, но положение не меняется.
+    val dim by animateFloatAsState(if (live) 0f else 1f, tween(320), label = "packetsDim")
+    val colors = bright.map { lerp(it, dimColor, 0.55f * dim) }
 
-    val progress = remember { Animatable(0f) }
+    var phase by remember { mutableFloatStateOf(0.12f) }
     LaunchedEffect(live) {
-        if (!live) {
-            progress.snapTo(0f)
-            return@LaunchedEffect
+        if (!live) return@LaunchedEffect
+        var last = 0L
+        while (true) {
+            withFrameNanos { now ->
+                if (last != 0L) {
+                    phase = (phase + (now - last) / PACKETS_PERIOD_NANOS) % 1f
+                }
+                last = now
+            }
         }
-        progress.snapTo(0f)
-        progress.animateTo(
-            1f,
-            infiniteRepeatable(tween(1800, easing = LinearEasing)),
-        )
     }
 
     androidx.compose.foundation.Canvas(Modifier.size(width = 34.dp, height = 10.dp)) {
         val dot = 4.dp.toPx()
         val r = dot / 2f
-        // Замершие позиции при выключенном VPN: 6 / 13 / 20 dp по левому краю точки.
-        val frozen = listOf(6.dp.toPx() + r, 13.dp.toPx() + r, 20.dp.toPx() + r)
         for (i in 0..2) {
-            val cx: Float
-            val alpha: Float
-            if (live) {
-                // Фазы 0.6 с при периоде 1.8 с — это треть пути: 0, 1/3, 2/3.
-                val t = (progress.value + i / 3f) % 1f
-                cx = -dot + t * (size.width + dot)
-                alpha = when {
-                    t < 0.18f -> t / 0.18f
-                    t > 0.78f -> (1f - t) / 0.22f
-                    else -> 1f
-                }
-            } else {
-                cx = frozen[i]
-                alpha = 0.85f - i * 0.15f
+            // Фазы 0.6 с при периоде 1.8 с — это треть пути: 0, 1/3, 2/3.
+            val t = (phase + i / 3f) % 1f
+            val cx = -dot + t * (size.width + dot)
+            // Края дорожки растворяют точку: появляется и уходит, а не обрезается.
+            val edge = when {
+                t < 0.18f -> t / 0.18f
+                t > 0.78f -> (1f - t) / 0.22f
+                else -> 1f
             }
             drawCircle(
-                color = colors[i].copy(alpha = (if (live) 1f else 0.6f) * alpha),
+                color = colors[i].copy(alpha = edge * (1f - 0.45f * dim)),
                 radius = r,
                 center = Offset(cx, size.height / 2f),
             )
         }
     }
 }
+
+/** Период оборота бусинки по дорожке — 1.8 с, как в макете. */
+private const val PACKETS_PERIOD_NANOS = 1_800_000_000f
 
 /** Тот же голубой, что у «подписка обновлена» и вспышки кнопки обновления.
  *  В светлой теме он должен быть темнее: неоновый на сером не читается. */
