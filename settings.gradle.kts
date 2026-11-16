@@ -7,3 +7,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "WingerVPN"
 include(":app")
+// Модуль для записи Baseline Profile (запускается на эмуляторе/устройстве).
+include(":benchmark")

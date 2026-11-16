@@ -46,10 +46,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -505,9 +507,11 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
             if (hasChoice) {
                 // Голубой градиент по буквам. Первый стоп — Cyan, то есть ровно
                 // цвет надписи «WINGER» (в каждой теме свой), последний — locPeak.
-                // «Окно» градиента в 2.5 раза шире текста, поэтому сдвиг даёт
-                // перелив, а самый светлый участок приходится на середину такта —
-                // ровно на пик свечения орла (оба идут 3.7 с).
+                //
+                // Текст измеряется ОДИН раз: при движении градиента меняется только
+                // шейдер, а не стиль. Раньше каждый кадр создавался новый TextStyle
+                // с новым brush — Compose пересчитывал форму текста (shaping) 60 раз
+                // в секунду, и это была самая дорогая часть включённого экрана.
                 val p = AppTheme.p
                 val peak = p.locPeak
                 val colors = arrayOf(
@@ -518,22 +522,35 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
                     1.00f to peak,
                 )
                 val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-                val animated = flow.value
-                val x = -animated * widthPx * 1.5f
-                Text(
-                    place,
-                    style = TextStyle(
-                        fontFamily = WingerSans,
+                val measurer = rememberTextMeasurer()
+                val layout = remember(place, nameSize, widthPx) {
+                    measurer.measure(
+                        text = AnnotatedString(place),
+                        style = TextStyle(
+                            fontFamily = WingerSans,
+                            fontSize = nameSize,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
+                        constraints = Constraints(maxWidth = widthPx.toInt().coerceAtLeast(1)),
+                    )
+                }
+                val heightDp = with(LocalDensity.current) { layout.size.height.toDp() }
+                androidx.compose.foundation.Canvas(
+                    Modifier.fillMaxWidth().height(heightDp).graphicsLayer()
+                ) {
+                    val x = -flow.value * size.width * 1.5f
+                    drawText(
+                        textLayoutResult = layout,
                         brush = Brush.linearGradient(
                             *colors,
                             start = Offset(x, 0f),
-                            end = Offset(x + widthPx * 2.5f, 0f),
+                            end = Offset(x + size.width * 2.5f, 0f),
                         ),
-                        fontSize = nameSize,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                )
+                    )
+                }
             } else {
                 Text(
                     s[R.string.home_not_selected], color = Dim, fontSize = nameSize,

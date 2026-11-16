@@ -148,11 +148,12 @@ object Store {
 
     /**
      * Как часто обновляются счётчики трафика ↑ / ↓ на главной, в секундах.
-     * По умолчанию 5: раз в секунду `TrafficStats` будил бы процесс без пользы —
-     * цифры всё равно меняются на килобайты, а не на глазах.
+     * По умолчанию 10: цифры всё равно меняются на килобайты, а каждое
+     * обновление — это пробуждение процесса и перерисовка строки. В настройках
+     * можно выбрать 1 / 5 / 10 / 30 с.
      */
     fun trafficIntervalSec(ctx: Context) =
-        prefs(ctx)?.getInt("trafficIntervalSec", 5)?.coerceIn(1, 60) ?: 5
+        prefs(ctx)?.getInt("trafficIntervalSec", 10)?.coerceIn(1, 60) ?: 10
 
     fun trafficIntervalSec(ctx: Context, seconds: Int) =
         write(ctx) { putInt("trafficIntervalSec", seconds.coerceIn(1, 60)) }
