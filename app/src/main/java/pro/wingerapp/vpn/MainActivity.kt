@@ -73,9 +73,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         VpnLog.init(this)
         CrashGuard.install()
-        Diag.harvestCrash(this)
-        Diag.harvestCoreLog(this, rotate = true)
-        Diag.logExitReasons(this)
+        // Диагностика читает файлы и историю падений — это файловые операции.
+        // На главном потоке они задерживали первый кадр, поэтому уводим их в
+        // отдельный поток: на работу приложения это не влияет, а старт быстрее.
+        val app = applicationContext
+        Thread({
+            runCatching { Diag.harvestCrash(app) }
+            runCatching { Diag.harvestCoreLog(app, rotate = true) }
+            runCatching { Diag.logExitReasons(app) }
+            VpnLog.add("диагностика собрана")
+        }, "diag-boot").start()
         VpnLog.add("app start")
         // Api.init() и проверка сессии переехали в AppViewModel.bootstrap():
         // они читают зашифрованный файл, а это поднимает Keystore. На главном
