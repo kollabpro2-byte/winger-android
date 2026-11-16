@@ -479,8 +479,12 @@ private fun LocationRow(place: String, live: Boolean, on: Boolean) {
     )
 
     Row(
-        Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 12.dp)
-            .drawBehind { dividerBottom(Line, 2.dp) },
+        // Линия рисуется СНАРУЖИ паддинга: drawBehind стоит до padding, поэтому
+        // получает полную высоту строки и её нижний край — это и есть отступ
+        // 12 dp под названием. Если поменять местами, линия уедет вплотную к тексту.
+        Modifier.fillMaxWidth()
+            .drawBehind { dividerBottom(Line, 2.dp) }
+            .padding(top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         BoxWithConstraints(Modifier.weight(1f)) {
@@ -744,9 +748,10 @@ private fun ServerRow(
                 RoundedCornerShape((14f * scale).dp)
             )
             .clickable { onClick() }
-            // Отступы внутри секции: при масштабе 1.5 это 15 dp, поэтому строка
-            // получается заметно выше прежней — как в макете.
-            .padding(horizontal = (12f * scale).dp, vertical = (10f * scale).dp),
+            // Внутренние отступы — как в макете: 12 × --srv по горизонтали и
+            // 6 × --srv по вертикали. Вертикальный уменьшен с 10 до 6: секция
+            // стала ниже на ~15 %, а кегли остались прежними.
+            .padding(horizontal = (12f * scale).dp, vertical = (6f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Галочки нет: выбранная строка и так отличается заливкой, рамкой и
