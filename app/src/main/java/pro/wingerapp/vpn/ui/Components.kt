@@ -149,10 +149,19 @@ private fun LoadBar(widthFraction: Float, alpha: Float) {
 internal fun rememberEagle(): ImageBitmap {
     val res = LocalContext.current.resources
     return remember(res) {
-        val opts = BitmapFactory.Options().apply { inScaled = false }
-        BitmapFactory.decodeResource(res, R.drawable.eagle, opts).asImageBitmap()
+        // Один декодированный растр на всё приложение: орёл нужен и в круге,
+        // и на экране входа, и в карточке подписки — три отдельных декодирования
+        // 300×230 px были лишней работой и памятью.
+        eagleCache ?: run {
+            val opts = BitmapFactory.Options().apply { inScaled = false }
+            BitmapFactory.decodeResource(res, R.drawable.eagle, opts).asImageBitmap()
+                .also { eagleCache = it }
+        }
     }
 }
+
+/** Кэш растра орла: заполняется при первом обращении из композиции (главный поток). */
+private var eagleCache: ImageBitmap? = null
 
 @Composable
 internal fun BirdMark() {

@@ -41,20 +41,29 @@ object VpnLog {
 
     @Synchronized
     fun add(line: String) {
-        try {
-            if (!::file.isInitialized) return
-            rotateIfDueLocked()
-            val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-            val body = line.replace("\r\n", "\n").replace('\r', '\n')
-            val formatted = body.lineSequence().mapIndexed { i, part ->
-                if (i == 0) "$ts $part" else "         $part"
-            }.joinToString("\n")
-            file.appendText(formatted + "\n")
-            if (file.length() > MAX_BYTES) {
-                val lines = file.readLines()
-                file.writeText(lines.takeLast(KEEP_LINES).joinToString("\n") + "\n")
+        // Раньше запись шла в вызывающем потоке — а вызывают её из UI (нажатие на
+        // круг, остановка туннеля). Один поток-писатель убирает файловые операции
+        // с главного потока и сохраняет порядок строк.
+        writer.execute { addNow(line) }
+    }
+
+    private fun addNow(line: String) {
+        synchronized(this) {
+            try {
+                if (!::file.isInitialized) return
+                rotateIfDueLocked()
+                val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                val body = line.replace("\r\n", "\n").replace('\r', '\n')
+                val formatted = body.lineSequence().mapIndexed { i, part ->
+                    if (i == 0) "$ts $part" else "         $part"
+                }.joinToString("\n")
+                file.appendText(formatted + "\n")
+                if (file.length() > MAX_BYTES) {
+                    val lines = file.readLines()
+                    file.writeText(lines.takeLast(KEEP_LINES).joinToString("\n") + "\n")
+                }
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
         }
     }
 
@@ -62,11 +71,14 @@ object VpnLog {
      * Часовая ротация. Вызывается из каждой записи и из heartbeat сервиса:
      * лог не должен расти сутками и занимать память устройства.
      */
-    @Synchronized
     fun rotateIfDue() {
-        try {
-            if (::file.isInitialized) rotateIfDueLocked()
-        } catch (_: Throwable) {
+        writer.execute {
+            synchronized(this) {
+                try {
+                    if (::file.isInitialized) rotateIfDueLocked()
+                } catch (_: Throwable) {
+                }
+            }
         }
     }
 
@@ -77,6 +89,7 @@ object VpnLog {
         file.writeText("")
     }
 
+    /** Читать нужно из фонового потока: файл может быть до 64 КБ. */
     @Synchronized
     fun text(): String = try {
         if (::file.isInitialized && file.exists()) file.readText().takeLast(12_000) else "лога нет"
@@ -84,15 +97,27 @@ object VpnLog {
         "лог недоступен"
     }
 
-    @Synchronized
     fun clear() {
-        try {
-            if (::file.isInitialized) {
-                file.writeText("")
-                lastRotate = System.currentTimeMillis()
+        writer.execute {
+            synchronized(this) {
+                try {
+                    if (::file.isInitialized) {
+                        file.writeText("")
+                        lastRotate = System.currentTimeMillis()
+                    }
+                } catch (_: Throwable) {
+                }
             }
-        } catch (_: Throwable) {
         }
+    }
+
+    /**
+     * Единственный поток-писатель: все файловые операции с логом идут здесь, а не
+     * в вызывающем потоке. `add()` вызывают из UI (нажатие на круг, остановка
+     * туннеля), и синхронный `appendText` там давал заметные подвисания.
+     */
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "vpn-log").apply { isDaemon = true }
     }
 
     /** Подрезает файл лога ядра: он пишется вне нашего контроля и растёт молча. */

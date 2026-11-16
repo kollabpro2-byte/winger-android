@@ -26,6 +26,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.BuildConfig
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.Store
@@ -38,7 +41,11 @@ import pro.wingerapp.vpn.VpnLog
 @Composable
 internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
     val s = rememberStrings()
-    var log by remember { mutableStateOf(VpnLog.text()) }
+    val scope = rememberCoroutineScope()
+    // Лог читаем в фоне: файл до 64 КБ, а раньше readText() вызывался прямо в
+    // композиции — при открытии настроек это давало заметный рывок.
+    var log by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { log = withContext(Dispatchers.IO) { VpnLog.text() } }
     var dns by remember { mutableStateOf(Store.dnsMode(ctx)) }
     var custom by remember { mutableStateOf(Store.dnsCustom(ctx)) }
     var hosts by remember { mutableStateOf(Store.bypass(ctx)) }
@@ -246,11 +253,14 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     LogButton(s[R.string.set_refresh], CardSoft, OnCard, Modifier.weight(1f)) {
-                        log = VpnLog.text()
+                        scope.launch { log = withContext(Dispatchers.IO) { VpnLog.text() } }
                     }
                     LogButton(s[R.string.set_copy], Purple, OnAccent, Modifier.weight(1f)) {
-                        ctx.getSystemService(ClipboardManager::class.java)
-                            .setPrimaryClip(ClipData.newPlainText("winger", VpnLog.text()))
+                        scope.launch {
+                            val text = withContext(Dispatchers.IO) { VpnLog.text() }
+                            ctx.getSystemService(ClipboardManager::class.java)
+                                .setPrimaryClip(ClipData.newPlainText("winger", text))
+                        }
                     }
                     LogButton(s[R.string.set_clear], Color(0xFF8B3A3A), OnAccent, Modifier.weight(1f)) {
                         VpnLog.clear()

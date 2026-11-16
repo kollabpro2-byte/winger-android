@@ -213,7 +213,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun pingAll(parsed: SubConfig) {
-        coroutineScope {
+        // Собираем все замеры и обновляем состояние ОДНИМ изменением: раньше каждая
+        // нода писала в StateFlow отдельно, и список серверов перерисовывался
+        // столько раз, сколько в нём узлов.
+        val fresh = coroutineScope {
             parsed.servers.map { node ->
                 async(Dispatchers.IO) {
                     val points = tcpEndpoints(parsed.raw, node.name).ifEmpty {
@@ -221,10 +224,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }.filter { it.host.isNotBlank() && it.port in 1..65535 }
                     val ms = if (points.isEmpty()) -1
                     else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
-                    _state.update { it.copy(pings = it.pings + (node.name to ms)) }
+                    node.name to ms
                 }
             }.awaitAll()
-        }
+        }.toMap()
+        _state.update { it.copy(pings = it.pings + fresh) }
     }
 
     private fun str(id: Int): String = getApplication<Application>().getString(id)
