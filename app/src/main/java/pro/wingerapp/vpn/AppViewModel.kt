@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.net.Api
 import pro.wingerapp.vpn.net.Sub
@@ -22,6 +24,9 @@ private const val AUTOPILOT_NAME = "Автопилот"
 
 /** Пауза перед замером пингов, чтобы старт не конкурировал с сетью за кадры. */
 private const val PING_SETTLE_MS = 350L
+
+/** Сколько живёт результат замера пинга, прежде чем его пересчитают заново. */
+private const val PING_TTL_MS = 5 * 60 * 1000L
 
 /**
  * Какой сервер выбрать сразу после входа: «Автопилот», если он есть в подписке,
@@ -91,6 +96,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<SubscriptionState> = _state.asStateFlow()
 
     private var deviceId = ""
+
+    /** Ограничитель параллельных замеров: не больше 5 TCP-подключений сразу. */
+    private val pingGate = Semaphore(5)
+
+    /** Кэш замеров: имя ноды → (время, мс). Живёт [PING_TTL_MS]. */
+    private val pingCache = HashMap<String, Pair<Long, Int?>>()
+    private val pingCacheLock = Any()
 
     /** Обновлялись ли уже из сети в этой сессии (кэш не считается). */
     private var refreshed = false
@@ -177,6 +189,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Api.logout()
         autoConnectAfterLogin = false
         refreshed = false
+        synchronized(pingCacheLock) { pingCache.clear() }
         runCatching { SubCache.clear(getApplication()) }
         _signedIn.value = false
         _state.value = SubscriptionState()
@@ -292,17 +305,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun pingAll(parsed: SubConfig) {
-        // Собираем все замеры и обновляем состояние ОДНИМ изменением: раньше каждая
-        // нода писала в StateFlow отдельно, и список серверов перерисовывался
-        // столько раз, сколько в нём узлов.
+        // Три ограничения, которых раньше не было:
+        //  1) не больше 5 одновременных TCP-подключений (Semaphore) — иначе на
+        //     подписке в 50 серверов телефон открывал 50 сокетов разом;
+        //  2) результат живёт 5 минут: повторное обновление не долбит сеть заново;
+        //  3) один апдейт состояния вместо N — список не перерисовывается N раз.
+        val now = System.currentTimeMillis()
         val fresh = coroutineScope {
             parsed.servers.map { node ->
                 async(Dispatchers.IO) {
-                    val points = tcpEndpoints(parsed.raw, node.name).ifEmpty {
-                        listOf(Endpoint(node.host, if (node.port in 1..65535) node.port else 443))
-                    }.filter { it.host.isNotBlank() && it.port in 1..65535 }
-                    val ms = if (points.isEmpty()) -1
-                    else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
+                    val cached = synchronized(pingCacheLock) { pingCache[node.name] }
+                    if (cached != null && now - cached.first < PING_TTL_MS) {
+                        return@async node.name to cached.second
+                    }
+                    val ms = pingGate.withPermit {
+                        val points = tcpEndpoints(parsed.raw, node.name).ifEmpty {
+                            listOf(Endpoint(node.host, if (node.port in 1..65535) node.port else 443))
+                        }.filter { it.host.isNotBlank() && it.port in 1..65535 }
+                        if (points.isEmpty()) -1
+                        else points.map { point -> tcpPing(point.host, point.port) }.filterNotNull().minOrNull()
+                    }
+                    synchronized(pingCacheLock) {
+                        pingCache[node.name] = System.currentTimeMillis() to ms
+                    }
                     node.name to ms
                 }
             }.awaitAll()

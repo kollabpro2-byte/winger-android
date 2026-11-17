@@ -81,6 +81,8 @@ fun HomeScreen(
                 // 6 секунд — заведомо больше, чем занимает подъём/снятие tun
                 // и пересборка маршрутов.
                 if (System.currentTimeMillis() - lastTunnelAt.get() < 6000L) return
+                // Экран погашен — не будим сеть замерами: результат никто не видит.
+                if (!AppVisibility.visible) return
                 vm.refresh(ping = true)
             }
         }

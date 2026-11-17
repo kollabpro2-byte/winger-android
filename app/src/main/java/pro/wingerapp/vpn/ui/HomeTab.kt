@@ -16,10 +16,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -134,70 +133,87 @@ internal fun HomeTab(
         )
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 16.5.sp)
-            Text(
-                // Номер сборки виден всегда: по нему проверяют, что установлен
-                // именно присланный APK, а не предыдущий.
-                "v${BuildConfig.VERSION_NAME}·${BuildConfig.VERSION_CODE}",
-                color = Muted, fontSize = 10.5.sp, modifier = Modifier.padding(start = 5.dp)
-            )
-        }
-        if (sub == null) {
-            Text(s[R.string.home_no_subscription], color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
-            Text(s[R.string.home_no_subscription_hint], color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-        }
-
-
-        // Слот фиксированной высоты: в шапке остаётся только таймер сессии.
-        TrafficTimer(traffic, on = on, intervalSec = trafficIntervalSec)
-
-        Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle)
-
-        // Название текущей локации — сразу под кнопкой, по центру (макет v106).
-        LocationRow(
-            place = place,
-            on = on,
-        )
-
-        StatsRow(
-            days = daysUntil(sub?.expires)?.let { s.quantity(R.plurals.days, it) } ?: s[R.string.fmt_none],
-            devices = s.format(
-                R.string.home_devices_value,
-                sub?.devicesUsed ?: 0,
-                if ((sub?.devices ?: 0) <= 0) "∞" else sub!!.devices.toString()
-            ),
-            traffic = trafficShort(sub, s),
-        )
-
-        err?.let {
-            Text(it, color = Color(0xFFF87171), fontSize = 12.sp, maxLines = 3, modifier = Modifier.padding(top = 6.dp))
-        }
-
-        if (servers.isEmpty()) Text(s[R.string.home_loading], color = Dim, modifier = Modifier.padding(top = 8.dp))
-        groups.forEachIndexed { index, group ->
-            if (index == 0) {
-                // Первый заголовок группы и есть строка действий: заголовок слева,
-                // «подписка обновлена» по центру, обновление и пинг справа.
-                ListHeaderRow(
-                    title = s[group.titleRes],
-                    scale = listScale,
-                    noticeText = notice.orEmpty().lowercase(),
-                    noticeAlpha = noticeAlpha.value,
-                    flash = flash.value,
-                    refreshing = refreshing,
-                    pinging = pinging,
-                    onRefresh = { reload(false) },
-                    onPing = { reload(true) },
-                )
-            } else {
+    androidx.compose.foundation.lazy.LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        // Отступы задаём контентом, а не паддингом контейнера: при ленивом списке
+        // так корректно считаются границы и не съедается прокрутка.
+        contentPadding = PaddingValues(horizontal = 16.dp),
+    ) {
+        item(key = "brand") {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("WINGER", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 16.5.sp)
                 Text(
-                    s[group.titleRes], color = Caption, fontSize = (8f * listScale).sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = (10f * listScale).dp, bottom = (4f * listScale).dp)
+                    // Номер сборки виден всегда: по нему проверяют, что установлен
+                    // именно присланный APK, а не предыдущий.
+                    "v${BuildConfig.VERSION_NAME}·${BuildConfig.VERSION_CODE}",
+                    color = Muted, fontSize = 10.5.sp, modifier = Modifier.padding(start = 5.dp)
                 )
             }
-            group.nodes.forEach { node ->
+        }
+        if (sub == null) {
+            item(key = "nosub") {
+                Column {
+                    Text(s[R.string.home_no_subscription], color = Color(0xFFF87171), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text(s[R.string.home_no_subscription_hint], color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
+
+        // Слот фиксированной высоты: в шапке остаётся только таймер сессии.
+        item(key = "traffic") { TrafficTimer(traffic, on = on, intervalSec = trafficIntervalSec) }
+
+        item(key = "orb") { Orb(on = on, hint = s[R.string.home_orb_hint], onToggle = onToggle) }
+
+        // Название текущей локации — сразу под кнопкой, по центру (макет v106).
+        item(key = "loc") { LocationRow(place = place, on = on) }
+
+        item(key = "stats") {
+            StatsRow(
+                days = daysUntil(sub?.expires)?.let { s.quantity(R.plurals.days, it) } ?: s[R.string.fmt_none],
+                devices = s.format(
+                    R.string.home_devices_value,
+                    sub?.devicesUsed ?: 0,
+                    if ((sub?.devices ?: 0) <= 0) "∞" else sub!!.devices.toString()
+                ),
+                traffic = trafficShort(sub, s),
+            )
+        }
+
+        err?.let { message ->
+            item(key = "err") {
+                Text(message, color = Color(0xFFF87171), fontSize = 12.sp, maxLines = 3, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+
+        if (servers.isEmpty()) {
+            item(key = "loading") { Text(s[R.string.home_loading], color = Dim, modifier = Modifier.padding(top = 8.dp)) }
+        }
+        groups.forEachIndexed { index, group ->
+            item(key = "head$index") {
+                if (index == 0) {
+                    // Первый заголовок группы и есть строка действий: заголовок слева,
+                    // «подписка обновлена» по центру, обновление и пинг справа.
+                    ListHeaderRow(
+                        title = s[group.titleRes],
+                        scale = listScale,
+                        noticeText = notice.orEmpty().lowercase(),
+                        noticeAlpha = noticeAlpha.value,
+                        flash = flash.value,
+                        refreshing = refreshing,
+                        pinging = pinging,
+                        onRefresh = { reload(false) },
+                        onPing = { reload(true) },
+                    )
+                } else {
+                    Text(
+                        s[group.titleRes], color = Caption, fontSize = (8f * listScale).sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = (10f * listScale).dp, bottom = (4f * listScale).dp)
+                    )
+                }
+            }
+            // Ключ по имени ноды: строки переиспользуются, а не пересоздаются при
+            // каждом обновлении пингов.
+            items(group.nodes, key = { node -> node.name }) { node ->
                 ServerRow(
                     node = node,
                     proto = node.proto.ifBlank { s.format(R.string.home_server_proto, node.port) },
@@ -212,7 +228,7 @@ internal fun HomeTab(
                 )
             }
         }
-        Spacer(Modifier.height(80.dp))
+        item(key = "tail") { Spacer(Modifier.height(80.dp)) }
     }
 }
 

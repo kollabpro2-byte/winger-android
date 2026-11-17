@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
      */
     override fun onResume() {
         super.onResume()
+        AppVisibility.visible = true
         if (TunnelState.serviceAlive) {
             TunnelState.sync(this)
             return
@@ -151,6 +152,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Статус-бар и навигация в цвет темы (Compose сам их не перекрашивает). */
+    override fun onPause() {
+        // Экран погашен или приложение в фоне: пинги и сетевые дёрганья не нужны.
+        AppVisibility.visible = false
+        super.onPause()
+    }
     private fun applySystemBars() {
         val palette = pro.wingerapp.vpn.ui.AppTheme.p
         val bg = if (palette.isLight) 0xFFCBD2DB.toInt() else 0xFF040D1A.toInt()
