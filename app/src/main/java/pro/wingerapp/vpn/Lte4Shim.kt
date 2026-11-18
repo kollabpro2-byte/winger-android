@@ -38,6 +38,8 @@ import kotlin.concurrent.thread
 internal class Lte4Shim(
     /** Режим из настроек: [Lte4.MODE_FLUSH] по умолчанию, см. [Lte4Wire]. */
     private val mode: Int = Lte4.MODE_FLUSH,
+    /** Сколько параллельных отправок вниз просить у релея (`f=1cN`). */
+    private val streams: Int = 1,
     private val protect: (Socket) -> Boolean,
 ) {
 
@@ -337,8 +339,8 @@ internal class Lte4Shim(
      */
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
         val startedAt = System.currentTimeMillis()
-        // Кадровый режим на релее включается параметром в path: /ws?f=1.
-        val path = if (mode == Lte4.MODE_FRAMED) Lte4.framedPath(hs.path) else hs.path
+        // Кадровый режим на релее включается параметром в path: /ws?f=1c32.
+        val path = if (mode == Lte4.MODE_FRAMED) Lte4.framedPath(hs.path, streams) else hs.path
         val url = "wss://" + hs.host + path
         val state = ConnState()
         val opened = CountDownLatch(1)
@@ -384,7 +386,7 @@ internal class Lte4Shim(
             runCatching { ws.cancel() }
             return
         }
-        VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}")
+        VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}, path ${hs.path}")
 
         // Батч-режимы: «авто» (сырые байты) и «кадры». Данные копятся в пачки, но
         // шлюзу они уходят с паузами: по замерам релея, если слать сообщения

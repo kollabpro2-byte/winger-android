@@ -203,11 +203,13 @@ class WingerVpnService : VpnService() {
         // её нет вовсе — ядро идёт в шлюз напрямую, как Xray.
         Store.migrateLte4Mode(this)
         val lte4Mode = Store.lte4Mode(this)
+        val lte4Streams = Store.lte4Streams(this)
         val shimPort = if (lte4Mode == Lte4.MODE_OFF) {
             0
         } else {
             runCatching {
-                val s = shim ?: Lte4Shim(lte4Mode) { socket -> protect(socket) }.also { shim = it }
+                val s = shim ?: Lte4Shim(lte4Mode, lte4Streams) { socket -> protect(socket) }
+                    .also { shim = it }
                 s.start()
             }.getOrElse {
                 VpnLog.add("LTE4 shim: не поднялся (${it.javaClass.simpleName})")

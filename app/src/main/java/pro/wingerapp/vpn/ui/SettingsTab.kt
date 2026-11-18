@@ -153,6 +153,7 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
         SettingsSection(s[R.string.set_core], "core" in open, onToggle = { toggle("core") }) {
             Text("sing-box-lx 1.14.4 (XHTTP)", color = TextMain, fontSize = 14.sp)
             var lte4 by remember { mutableIntStateOf(Store.lte4Mode(ctx)) }
+            var streams by remember { mutableIntStateOf(Store.lte4Streams(ctx)) }
             Text(
                 s[R.string.set_lte4], color = OnCard, fontSize = 13.sp,
                 modifier = Modifier.padding(top = 12.dp),
@@ -171,6 +172,25 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                     Seg(label, lte4 == mode, Modifier.weight(1f)) {
                         lte4 = mode
                         Store.lte4Mode(ctx, mode)
+                        onApply()
+                    }
+                }
+            }
+            // Потоки вниз имеют смысл только в кадровом режиме: релей отдаёт
+            // кадры параллельно, клиент их сортирует по seq. Без c — строгий порядок.
+            Text(
+                s[R.string.set_lte4_streams], color = OnCard, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            Text(
+                s[R.string.set_lte4_streams_hint], color = Muted, fontSize = 11.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(Modifier.padding(top = 8.dp)) {
+                listOf(1, 8, 16, 32).forEach { n ->
+                    Seg("$n", streams == n, Modifier.weight(1f)) {
+                        streams = n
+                        Store.lte4Streams(ctx, n)
                         onApply()
                     }
                 }

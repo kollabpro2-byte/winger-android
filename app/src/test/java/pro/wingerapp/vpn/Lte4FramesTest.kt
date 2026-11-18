@@ -70,6 +70,12 @@ class Lte4FramesTest {
         assertEquals("/ws?a=1&f=1", Lte4.framedPath("/ws?a=1"))
         assertEquals("/ws?f=1", Lte4.framedPath("/ws?f=1"))
         assertEquals("/ws?f=1", Lte4.framedPath(""))
+        // Параллельная отправка кодируется в самом флаге: отдельный &c= шлюз режет.
+        assertEquals("/ws?f=1c32", Lte4.framedPath("/ws", 32))
+        assertEquals("/ws?a=1&f=1c16", Lte4.framedPath("/ws?a=1", 16))
+        assertEquals("/ws?f=1", Lte4.framedPath("/ws", 1))
+        // Явно заданное в подписке не переопределяем.
+        assertEquals("/ws?f=1c8", Lte4.framedPath("/ws?f=1c8", 32))
     }
 
     /**

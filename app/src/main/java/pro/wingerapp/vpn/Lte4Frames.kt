@@ -89,12 +89,17 @@ internal object Lte4 {
 
     /**
      * Кадровый режим на релее включается параметром в path: `/ws?f=1`.
+     * С v4 релей умеет отправлять вниз параллельно, и число потоков кодируется
+     * в самом флаге: `/ws?f=1c32`. Отдельный `&c=` шлюз отбрасывает.
      * Без него релей работает как обычный VLESS-WS, поэтому добавляем сами.
      */
-    fun framedPath(path: String): String {
+    fun framedPath(path: String, streams: Int = 1): String {
         val p = path.trim().ifBlank { "/ws" }
-        if (p.contains("f=1")) return p
-        return if (p.contains('?')) "$p&f=1" else "$p?f=1"
+        // Уже включено в подписке — не переопределяем.
+        if (p.contains("f=")) return p
+        val n = streams.coerceIn(1, 32)
+        val flag = if (n > 1) "f=1c$n" else "f=1"
+        return if (p.contains('?')) "$p&$flag" else "$p?$flag"
     }
 }
 
