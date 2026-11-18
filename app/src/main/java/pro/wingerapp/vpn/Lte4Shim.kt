@@ -63,10 +63,31 @@ internal class Lte4Shim(
     private val tickers = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
 
     /**
+     * Живые локальные сокеты и WS-соединения. Нужны, чтобы при выключении VPN
+     * закрыть всё сразу: иначе висят потоки и сокеты, а ядро ждёт EOF вместо
+     * мгновенного переподключения.
+     */
+    private val locals = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
+    private val websockets = java.util.concurrent.ConcurrentHashMap.newKeySet<WebSocket>()
+
+    /** Отказы по потолку соединений: логируем редко, иначе шторм забьёт журнал. */
+    private val refusals = AtomicInteger(0)
+
+    /**
      * Сокеты исходящего WSS обязательно защищаем: приложение исключено из
      * туннеля, но protect() — страховка от петли, если политики изменятся.
      */
     private val client = OkHttpClient.Builder()
+        // IPv4 в приоритете. Половина «плавающих» обрывов на мобильных сетях —
+        // это AAAA, который резолвится, но не маршрутизируется; ядро у нас тоже
+        // по умолчанию берёт только A-записи.
+        .dns(object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val all = okhttp3.Dns.SYSTEM.lookup(hostname)
+                val v4 = all.filterIsInstance<java.net.Inet4Address>()
+                return if (v4.isNotEmpty()) v4 else all
+            }
+        })
         .socketFactory(object : javax.net.SocketFactory() {
             override fun createSocket(): Socket = Socket().also { protect(it) }
             override fun createSocket(host: String, port: Int): Socket =
@@ -101,7 +122,10 @@ internal class Lte4Shim(
                 thread(isDaemon = true, name = "lte4-conn") { serve(sock) }
             }
         }
-        VpnLog.add("LTE4 shim слушает 127.0.0.1:$port, режим ${Lte4.modeName(mode)}")
+        VpnLog.add(
+            "LTE4 shim слушает 127.0.0.1:$port, режим ${Lte4.modeName(mode)}" +
+                if (mode == Lte4.MODE_FRAMED) ", потоков ${streams.coerceIn(1, 32)}" else ""
+        )
         if (mode == Lte4.MODE_AUTO || mode == Lte4.MODE_FRAMED) startTicker()
         return port
     }
@@ -112,6 +136,14 @@ internal class Lte4Shim(
         server = null
         port = 0
         tickers.clear()
+        // Рвём всё, что осталось открытым: после выключения VPN ни сокеты, ни
+        // потоки не должны жить своей жизнью.
+        for (s in locals) runCatching { s.close() }
+        locals.clear()
+        for (ws in websockets) runCatching { ws.cancel() }
+        websockets.clear()
+        runCatching { client.dispatcher.executorService.shutdown() }
+        runCatching { client.connectionPool.evictAll() }
     }
 
     /**
@@ -138,11 +170,17 @@ internal class Lte4Shim(
         // Страховка от шторма: ядро при неудаче переподключается десятки раз в
         // секунду, и без потолка это сотни потоков и гигабайты стека.
         if (live.get() >= MAX_LIVE) {
-            VpnLog.add("LTE4 shim: отказ, уже $MAX_LIVE соединений")
+            val n = refusals.incrementAndGet()
+            // Пишем только первый и каждый сотый отказ, иначе шторм за пару
+            // секунд вытеснит из журнала всё полезное.
+            if (n == 1 || n % 100 == 0) {
+                VpnLog.add("LTE4 shim: отказ по потолку ($MAX_LIVE), всего отказов $n")
+            }
             runCatching { local.close() }
             return
         }
         live.incrementAndGet()
+        locals += local
         try {
             local.tcpNoDelay = true
             local.soTimeout = 0
@@ -164,6 +202,7 @@ internal class Lte4Shim(
             VpnLog.add("LTE4 shim: соединение закрыто (${e.javaClass.simpleName})")
         } finally {
             live.decrementAndGet()
+            locals -= local
             runCatching { local.close() }
         }
     }
@@ -329,6 +368,13 @@ internal class Lte4Shim(
          * 6-байтным заголовком не вылезаем за лимит шлюза в 32 КБ на кадр.
          */
         const val FRAME_PAYLOAD = 24 * 1024
+
+        /**
+         * Простой, после которого всё равно шлём PING/пустое. Шлюз закрывает
+         * соединение через 10 минут тишины, NAT — заметно раньше; одно сообщение
+         * в минуту дешевле, чем переподключение и потерянные запросы.
+         */
+        const val IDLE_KEEPALIVE_MS = 60_000L
     }
 
     /**
@@ -381,8 +427,10 @@ internal class Lte4Shim(
                 }
             }
         )
+        websockets += ws
         if (!opened.await(12, TimeUnit.SECONDS) || !state.open) {
             VpnLog.add("LTE4 shim: WSS не открылся за 12 с")
+            websockets -= ws
             runCatching { ws.cancel() }
             return
         }
@@ -461,6 +509,12 @@ internal class Lte4Shim(
                                 deliverLocked(parts)
                             } else if (pushForTick.takeIfDue(now)) {
                                 if (!ws.send(pusherMessage())) state.open = false
+                            } else if (now - state.lastDataAt >= IDLE_KEEPALIVE_MS) {
+                                // Шлюз рвёт простой через 10 минут, а NAT — раньше.
+                                // PING/пустое сообщение релей игнорирует, зато
+                                // соединение остаётся живым и не переподключается.
+                                if (!ws.send(pusherMessage())) state.open = false
+                                state.lastDataAt = now
                             }
                         }
                     }
@@ -522,6 +576,7 @@ internal class Lte4Shim(
             // Обрыв любой стороны — закрываем обе.
         } finally {
             if (ticker != null) tickers -= ticker
+            websockets -= ws
             // Хвост, который ещё лежит в склейке или в очереди кадров, надо отдать:
             // иначе последний кусок запроса не дойдёт и страница/файл повиснут.
             if (autoUp != null && pusher != null && state.open) {
@@ -566,6 +621,17 @@ internal class Lte4Shim(
      * не трогаем, иначе поток развалится.
      */
     private fun onGatewayMessage(bytes: ByteArray, output: OutputStream, state: ConnState) {
+        try {
+            deliverToCore(bytes, output, state)
+        } catch (_: Throwable) {
+            // Локальный сокет закрылся (ядро ушло раньше шлюза). Гасим пару
+            // аккуратно: исключение из колбэка OkHttp иначе валит соединение
+            // грязно и с шумом в логе.
+            state.open = false
+        }
+    }
+
+    private fun deliverToCore(bytes: ByteArray, output: OutputStream, state: ConnState) {
         if (!Lte4Wire.inboundIsFramed(mode)) {
             if (bytes.isEmpty()) return
             state.inFrames++
