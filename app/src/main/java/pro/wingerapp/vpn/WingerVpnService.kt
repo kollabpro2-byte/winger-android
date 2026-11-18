@@ -199,13 +199,19 @@ class WingerVpnService : VpnService() {
         coreLogFile = logFile?.let { File(it) }
 
         // Прослойку поднимаем ДО старта ядра: первое же подключение к
-        // 127.0.0.1:port иначе упадёт с «connection refused».
-        val shimPort = runCatching {
-            val s = shim ?: Lte4Shim { socket -> protect(socket) }.also { shim = it }
-            s.start()
-        }.getOrElse {
-            VpnLog.add("LTE4 shim: не поднялся (${it.javaClass.simpleName})")
+        // 127.0.0.1:port иначе упадёт с «connection refused». В режиме «выкл»
+        // её нет вовсе — ядро идёт в шлюз напрямую, как Xray.
+        val lte4Mode = Store.lte4Mode(this)
+        val shimPort = if (lte4Mode == Lte4.MODE_OFF) {
             0
+        } else {
+            runCatching {
+                val s = shim ?: Lte4Shim(lte4Mode) { socket -> protect(socket) }.also { shim = it }
+                s.start()
+            }.getOrElse {
+                VpnLog.add("LTE4 shim: не поднялся (${it.javaClass.simpleName})")
+                0
+            }
         }
 
         // A single unknown JSON field makes the core reject the whole config and

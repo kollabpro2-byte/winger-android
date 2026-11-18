@@ -57,6 +57,56 @@ internal object Lte4 {
         val h = host.trim().lowercase()
         return h == "apigw.yandexcloud.net" || h.endsWith(".apigw.yandexcloud.net")
     }
+
+    /** Прослойка выключена: ядро ходит в шлюз напрямую, как Xray. */
+    const val MODE_OFF: Int = 0
+
+    /**
+     * Байты не меняются, но после каждого сообщения уходит пустое: шлюз
+     * придерживает сообщение до прихода следующего, и пустое его выталкивает.
+     */
+    const val MODE_FLUSH: Int = 1
+
+    /**
+     * Кадры с версией, типом и seq. Требует такой же разбор на стороне сервера
+     * за шлюзом — без него поток превращается в мусор.
+     */
+    const val MODE_FRAMED: Int = 2
+
+    fun modeName(mode: Int): String = when (mode) {
+        MODE_OFF -> "выкл"
+        MODE_FLUSH -> "флаш"
+        MODE_FRAMED -> "кадры"
+        else -> "?"
+    }
+}
+
+/**
+ * Что именно прослойка отправляет в шлюз на один кусок потока.
+ *
+ * Вынесено из сетевого кода, чтобы поведение режимов проверялось тестами:
+ * ошибка здесь стоит дорого — ядро видит «ядро запущено, а трафика нет».
+ */
+internal object Lte4Wire {
+
+    /** Сообщения для шлюза: в «кадровом» режиме это кадр, иначе — сам кусок. */
+    fun outbound(mode: Int, seq: Long, chunk: ByteArray): List<ByteArray> = when (mode) {
+        Lte4.MODE_FRAMED -> listOf(Lte4.encode(Lte4.TYPE_DATA, seq, chunk))
+        Lte4.MODE_FLUSH -> listOf(chunk, EMPTY)
+        else -> listOf(chunk)
+    }
+
+    /** Периодический «толкач»: в кадрах — PING, во флаше — пустое сообщение. */
+    fun keepAlive(mode: Int, seq: Long): ByteArray? = when (mode) {
+        Lte4.MODE_FRAMED -> Lte4.encode(Lte4.TYPE_PING, seq)
+        Lte4.MODE_FLUSH -> EMPTY
+        else -> null
+    }
+
+    /** Нужно ли разбирать входящие кадры и восстанавливать порядок. */
+    fun inboundIsFramed(mode: Int): Boolean = mode == Lte4.MODE_FRAMED
+
+    private val EMPTY = ByteArray(0)
 }
 
 /**

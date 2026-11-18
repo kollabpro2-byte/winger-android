@@ -71,6 +71,11 @@
     <string name="set_core">ЯДРО</string>
     <string name="set_core_log">Подробный лог ядра</string>
     <string name="set_core_log_hint">Нужен, чтобы разобрать, почему нет соединения</string>
+    <string name="set_lte4">Шлюз Яндекса (LTE4)</string>
+    <string name="set_lte4_hint">Только для серверов *.apigw.yandexcloud.net. «Выкл» — ядро подключается напрямую. «Флаш» — пустые сообщения, чтобы шлюз не придерживал данные (поток байт не меняется). «Кадры» — нумерация и восстановление порядка, нужна поддержка на сервере</string>
+    <string name="set_lte4_off">Выкл</string>
+    <string name="set_lte4_flush">Флаш</string>
+    <string name="set_lte4_framed">Кадры</string>
     <string name="set_bypass">БЕЗ ТУННЕЛЯ</string>
     <string name="set_bypass_hint">Эти домены идут напрямую, мимо VPN</string>
     <string name="set_bg">Фон и батарея</string>

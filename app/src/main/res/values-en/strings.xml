@@ -71,6 +71,11 @@
     <string name="set_core">CORE</string>
     <string name="set_core_log">Verbose core log</string>
     <string name="set_core_log_hint">Needed to find out why there is no connection</string>
+    <string name="set_lte4">Yandex gateway (LTE4)</string>
+    <string name="set_lte4_hint">Only for *.apigw.yandexcloud.net servers. Off — the core connects directly. Flush — empty messages so the gateway does not hold data back (bytes stay unchanged). Frames — sequencing and reordering, needs server support</string>
+    <string name="set_lte4_off">Off</string>
+    <string name="set_lte4_flush">Flush</string>
+    <string name="set_lte4_framed">Frames</string>
     <string name="set_bypass">NO TUNNEL</string>
     <string name="set_bypass_hint">These domains go straight out, around the VPN</string>
     <string name="set_bg">Background &amp; battery</string>

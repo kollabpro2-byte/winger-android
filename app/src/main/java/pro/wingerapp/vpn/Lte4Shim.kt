@@ -35,7 +35,11 @@ import kotlin.concurrent.thread
  * ```
  * TLS делает прослойка, поэтому в конфиге ядра для таких серверов нет `tls`.
  */
-internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
+internal class Lte4Shim(
+    /** Режим из настроек: [Lte4.MODE_FLUSH] по умолчанию, см. [Lte4Wire]. */
+    private val mode: Int = Lte4.MODE_FLUSH,
+    private val protect: (Socket) -> Boolean,
+) {
 
     private var server: ServerSocket? = null
 
@@ -88,7 +92,7 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
                 thread(isDaemon = true, name = "lte4-conn") { serve(sock) }
             }
         }
-        VpnLog.add("LTE4 shim слушает 127.0.0.1:$port")
+        VpnLog.add("LTE4 shim слушает 127.0.0.1:$port, режим ${Lte4.modeName(mode)}")
         return port
     }
 
@@ -100,6 +104,13 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
     }
 
     private fun serve(local: Socket) {
+        // Страховка от шторма: ядро при неудаче переподключается десятки раз в
+        // секунду, и без потолка это сотни потоков и гигабайты стека.
+        if (live.get() >= MAX_LIVE) {
+            VpnLog.add("LTE4 shim: отказ, уже $MAX_LIVE соединений")
+            runCatching { local.close() }
+            return
+        }
         live.incrementAndGet()
         try {
             local.tcpNoDelay = true
@@ -135,6 +146,8 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         val seq = AtomicLong(0)
         var inFrames = 0L
         var outFrames = 0L
+        var sentBytes = 0L
+        var recvBytes = 0L
 
         /**
          * Свой буфер порядка на каждое соединение: seq начинается с 0 у каждой
@@ -266,10 +279,16 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
 
     private companion object {
         const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+        /** Потолок одновременных соединений через прослойку. */
+        const val MAX_LIVE = 96
     }
 
     /**
      * Подключает шлюз и гоняет трафик в обе стороны, пока одна из сторон не закроется.
+     *
+     * Режим определяет только то, что уходит и что разбирается: в «флаше» и
+     * «выкл» поток байт не меняется, в «кадрах» добавляется заголовок и порядок.
      */
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
         val url = "wss://" + hs.host + hs.path
@@ -284,22 +303,29 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    onGatewayFrame(bytes.toByteArray(), output, state)
+                    onGatewayMessage(bytes.toByteArray(), output, state)
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    // Код закрытия — главный признак: 1006 обрыв без close-кадра,
+                    // 1011 шлюз/сервер упал, 4xxx — политика. Без него гадать бесполезно.
+                    VpnLog.add("LTE4 shim: шлюз закрывает ${code}${reason.take(40).let { if (it.isBlank()) "" else " $it" }}")
                     state.open = false
                     runCatching { local.close() }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     state.open = false
+                    VpnLog.add("LTE4 shim: закрыто шлюзом $code")
                     runCatching { local.close() }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     state.open = false
-                    VpnLog.add("LTE4 shim: WSS ${t.javaClass.simpleName}")
+                    VpnLog.add(
+                        "LTE4 shim: WSS ${t.javaClass.simpleName}" +
+                            (response?.code?.let { " http $it" } ?: "")
+                    )
                     opened.countDown()
                     runCatching { local.close() }
                 }
@@ -310,15 +336,19 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
             runCatching { ws.cancel() }
             return
         }
+        VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}")
 
-        // PING выталкивает застрявшее в шлюзе сообщение: 300 мс первые 3 с после
-        // последних данных, дальше раз в 5 с — чтобы не закрылось по простою.
-        thread(isDaemon = true, name = "lte4-ping") {
-            while (state.open && running) {
-                val idle = System.currentTimeMillis() - state.lastDataAt
-                Thread.sleep(if (idle < 3000) 300 else 5000)
-                if (!state.open || !running) break
-                ws.send(Lte4.encode(Lte4.TYPE_PING, state.seq.get()).toByteString())
+        // PING (или пустое сообщение) выталкивает застрявшее в шлюзе: 300 мс первые
+        // 3 с после последних данных, дальше раз в 5 с — чтобы не закрылось по простою.
+        if (Lte4Wire.keepAlive(mode, 0) != null) {
+            thread(isDaemon = true, name = "lte4-ping") {
+                while (state.open && running) {
+                    val idle = System.currentTimeMillis() - state.lastDataAt
+                    Thread.sleep(if (idle < 3000) 300 else 5000)
+                    if (!state.open || !running) break
+                    val ka = Lte4Wire.keepAlive(mode, state.seq.get()) ?: break
+                    ws.send(ka.toByteString())
+                }
             }
         }
 
@@ -329,12 +359,20 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
                 while (offset < message.size) {
                     val size = minOf(Lte4.MAX_CHUNK, message.size - offset)
                     val chunk = message.copyOfRange(offset, offset + size)
-                    val seq = state.seq.getAndIncrement()
+                    val seq = if (Lte4Wire.inboundIsFramed(mode)) state.seq.getAndIncrement() else 0L
                     // send() == false значит соединение уже закрывается: добивать
                     // остаток сообщения бессмысленно, выходим из чтения целиком.
-                    if (!ws.send(Lte4.encode(Lte4.TYPE_DATA, seq, chunk).toByteString())) break@read
+                    var ok = true
+                    for (part in Lte4Wire.outbound(mode, seq, chunk)) {
+                        if (!ws.send(part.toByteString())) {
+                            ok = false
+                            break
+                        }
+                    }
+                    if (!ok) break@read
                     state.lastDataAt = System.currentTimeMillis()
                     state.outFrames++
+                    state.sentBytes += chunk.size
                     offset += size
                 }
             }
@@ -343,15 +381,32 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         } finally {
             state.open = false
             runCatching { ws.close(1000, "bye") }
-            VpnLog.add("LTE4 shim: закрыто, ↑${state.outFrames} ↓${state.inFrames} фреймов")
+            VpnLog.add(
+                "LTE4 shim: закрыто (${Lte4.modeName(mode)}), ↑${state.outFrames}/${state.sentBytes} б " +
+                    "↓${state.inFrames}/${state.recvBytes} б"
+            )
         }
     }
 
-    /** Кадр от шлюза: PING игнорируем, DATA ставим в очередь порядка и отдаём. */
-    private fun onGatewayFrame(bytes: ByteArray, output: OutputStream, state: ConnState) {
+    /**
+     * Сообщение от шлюза.
+     *
+     * «Кадры»: PING игнорируем, DATA ставим в очередь порядка и отдаём по seq.
+     * «Флаш» и «выкл»: это уже готовые байты VLESS — отдаём как есть, порядок
+     * не трогаем, иначе поток развалится.
+     */
+    private fun onGatewayMessage(bytes: ByteArray, output: OutputStream, state: ConnState) {
+        if (!Lte4Wire.inboundIsFramed(mode)) {
+            if (bytes.isEmpty()) return
+            state.inFrames++
+            state.recvBytes += bytes.size
+            writeFrame(output, 0x2, bytes)
+            return
+        }
         val frame = Lte4.decode(bytes) ?: return
         if (frame.type == Lte4.TYPE_PING) return
         state.inFrames++
+        state.recvBytes += frame.payload.size
         synchronized(state) {
             for (payload in state.reorder.put(frame.seq, frame.payload)) {
                 var offset = 0

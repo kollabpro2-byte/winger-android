@@ -1,5 +1,6 @@
 package pro.wingerapp.vpn
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
@@ -88,6 +89,43 @@ class Lte4FramesTest {
     @Test
     fun chunkLimitRespectsFramesOf32Kb() {
         assertEquals(32 * 1024, Lte4.MAX_CHUNK)
+    }
+
+    /**
+     * Режимы прослойки: «флаш» и «выкл» не трогают поток байт — иначе ядро
+     * получит мусор вместо VLESS. Ломается это молча: коннект есть, трафика нет.
+     */
+    @Test
+    fun rawAndFlushModesLeaveTheByteStreamIntact() {
+        val chunk = "payload".toByteArray()
+        val flush = Lte4Wire.outbound(Lte4.MODE_FLUSH, 5, chunk)
+        assertEquals(2, flush.size)
+        assertArrayEquals(chunk, flush[0])
+        assertEquals(0, flush[1].size)
+
+        val off = Lte4Wire.outbound(Lte4.MODE_OFF, 5, chunk)
+        assertEquals(1, off.size)
+        assertArrayEquals(chunk, off[0])
+
+        assertFalse(Lte4Wire.inboundIsFramed(Lte4.MODE_FLUSH))
+        assertFalse(Lte4Wire.inboundIsFramed(Lte4.MODE_OFF))
+        assertTrue(Lte4Wire.inboundIsFramed(Lte4.MODE_FRAMED))
+    }
+
+    @Test
+    fun framedModeWrapsChunkAndKeepAliveFollowsMode() {
+        val chunk = byteArrayOf(1, 2, 3)
+        val out = Lte4Wire.outbound(Lte4.MODE_FRAMED, 9, chunk)
+        assertEquals(1, out.size)
+        val frame = Lte4.decode(out[0])
+        assertEquals(Lte4.TYPE_DATA, frame?.type)
+        assertEquals(9L, frame?.seq)
+        assertArrayEquals(chunk, frame?.payload)
+
+        // «Флаш» толкает пустым сообщением, «выкл» не толкает вовсе.
+        assertEquals(0, Lte4Wire.keepAlive(Lte4.MODE_FLUSH, 1)?.size)
+        assertNull(Lte4Wire.keepAlive(Lte4.MODE_OFF, 1))
+        assertEquals(Lte4.TYPE_PING, Lte4.decode(Lte4Wire.keepAlive(Lte4.MODE_FRAMED, 4)!!)?.type)
     }
 
     /**

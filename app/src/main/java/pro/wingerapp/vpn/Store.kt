@@ -227,6 +227,23 @@ object Store {
         write(ctx) { putInt("trafficIntervalSec", seconds.coerceIn(1, 60)) }
 
     /** Verbose sing-box file log, also for release builds (diagnostics on device). */
+    /**
+     * Прослойка для шлюза Яндекса (`*.apigw.yandexcloud.net`).
+     *
+     * 0 — выключена: ядро подключается к шлюзу напрямую, как Xray;
+     * 1 — «флаш»: байты идут как есть, после каждого сообщения уходит пустое,
+     *     чтобы шлюз не придерживал данные до следующего;
+     * 2 — «кадры»: нумерация seq и восстановление порядка. Требует такого же
+     *     разбора на стороне сервера за шлюзом.
+     *
+     * По умолчанию «флаш»: он не меняет поток байт, поэтому безопасен для
+     * любого сервера, и при этом лечит «придерживание».
+     */
+    fun lte4Mode(ctx: Context) = prefs(ctx)?.getInt("lte4Mode", Lte4.MODE_FLUSH)?.coerceIn(0, 2)
+        ?: Lte4.MODE_FLUSH
+
+    fun lte4Mode(ctx: Context, mode: Int) = write(ctx) { putInt("lte4Mode", mode.coerceIn(0, 2)) }
+
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
 
     fun coreLog(ctx: Context, on: Boolean) = write(ctx) { putBoolean("coreLog", on) }

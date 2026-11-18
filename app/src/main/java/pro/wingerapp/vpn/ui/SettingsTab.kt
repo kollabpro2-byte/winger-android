@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.BuildConfig
+import pro.wingerapp.vpn.Lte4
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.Store
 import pro.wingerapp.vpn.VpnLog
@@ -151,6 +152,28 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
 
         SettingsSection(s[R.string.set_core], "core" in open, onToggle = { toggle("core") }) {
             Text("sing-box-lx 1.14.4 (XHTTP)", color = TextMain, fontSize = 14.sp)
+            var lte4 by remember { mutableIntStateOf(Store.lte4Mode(ctx)) }
+            Text(
+                s[R.string.set_lte4], color = OnCard, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            Text(
+                s[R.string.set_lte4_hint], color = Muted, fontSize = 11.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(Modifier.padding(top = 8.dp)) {
+                listOf(
+                    Lte4.MODE_OFF to s[R.string.set_lte4_off],
+                    Lte4.MODE_FLUSH to s[R.string.set_lte4_flush],
+                    Lte4.MODE_FRAMED to s[R.string.set_lte4_framed],
+                ).forEach { (mode, label) ->
+                    Seg(label, lte4 == mode, Modifier.weight(1f)) {
+                        lte4 = mode
+                        Store.lte4Mode(ctx, mode)
+                        onApply()
+                    }
+                }
+            }
             var verbose by remember { mutableStateOf(BuildConfig.CORE_LOG || Store.coreLog(ctx)) }
             SwitchRow(s[R.string.set_core_log], s[R.string.set_core_log_hint], verbose, divider = true) {
                 verbose = it
