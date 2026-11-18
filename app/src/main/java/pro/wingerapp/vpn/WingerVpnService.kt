@@ -283,33 +283,32 @@ class WingerVpnService : VpnService() {
                 runCatching { server.close() }
                 singServer = null
                 val message = e.message.orEmpty()
-                if (retryableConfigError(message) && attempt < 8) {
-                    // Имя поля из текста ошибки: "outbounds[1].transport.<field>".
-                    val badField = Regex("""transport\.([A-Za-z0-9_]+)""")
-                        .find(message)?.groupValues?.get(1)
-                    if (badField != null && dropped.add(badField)) {
-                        VpnLog.add("ядро отвергло поле $badField — повтор без него")
-                        attempt++
-                        continue
+                // Имя поля из текста ошибки: "outbounds[1].transport.<field>".
+                val badField = Regex("""transport\.([A-Za-z0-9_]+)""")
+                    .find(message)?.groupValues?.get(1)
+                if (badField != null && dropped.add(badField) && attempt < 8) {
+                    VpnLog.add("ядро отвергло поле $badField — повтор без него")
+                    attempt++
+                    continue
+                }
+                // Любая ошибка запуска ядра: сначала отступаем по роутингу из
+                // подписки — он необязателен, а туннель нужен. Это ловит и такие
+                // ответы, как "detour to an empty direct outbound makes no sense".
+                if (subRouting != RoutingPlan.OFF && attempt < 8) {
+                    subRouting = if (subRouting == RoutingPlan.RULES_AND_DNS) {
+                        RoutingPlan.RULES
+                    } else {
+                        RoutingPlan.OFF
                     }
-                    if (subRouting != RoutingPlan.OFF) {
-                        // Ядро не приняло dns/route из подписки: сначала остаются
-                        // только правила, потом наши обычные настройки.
-                        subRouting = if (subRouting == RoutingPlan.RULES_AND_DNS) {
-                            RoutingPlan.RULES
-                        } else {
-                            RoutingPlan.OFF
-                        }
-                        VpnLog.add("роутинг подписки отвергнут — повтор в режиме $subRouting")
-                        attempt++
-                        continue
-                    }
-                    if (!useMinimal) {
-                        VpnLog.add("конфиг отвергнут ядром, повтор без XHTTP-настроек")
-                        useMinimal = true
-                        attempt++
-                        continue
-                    }
+                    VpnLog.add("роутинг подписки отвергнут ($message) — повтор в режиме $subRouting")
+                    attempt++
+                    continue
+                }
+                if (retryableConfigError(message) && attempt < 8 && !useMinimal) {
+                    VpnLog.add("конфиг отвергнут ядром, повтор без XHTTP-настроек")
+                    useMinimal = true
+                    attempt++
+                    continue
                 }
                 throw e
             }

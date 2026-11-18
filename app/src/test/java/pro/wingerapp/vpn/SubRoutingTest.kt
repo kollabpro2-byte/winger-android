@@ -131,7 +131,9 @@ class SubRoutingTest {
         assertEquals("/dns-query", proxyDoh.getString("path"))
 
         val directDoh = entries.first { it.optString("server") == "common.dot.dns.yandex.net" }
-        assertEquals("direct", directDoh.getString("detour"))
+        // Без detour: ядро отвечает "detour to an empty direct outbound makes no
+        // sense", а сервер без detour и так идёт мимо туннеля.
+        assertFalse(directDoh.has("detour"))
 
         val rules = dns.getJSONArray("rules")
         // habr → DoH через прокси, ozon → DoH мимо, nalog → hosts.

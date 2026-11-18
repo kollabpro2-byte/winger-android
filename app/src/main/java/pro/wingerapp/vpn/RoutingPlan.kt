@@ -267,9 +267,12 @@ internal object RoutingPlan {
         return when {
             address.startsWith("https+local://") -> {
                 val rest = address.removePrefix("https+local://")
+                // Без detour — и это принципиально: sing-box не разрешает detour
+                // на «пустой» direct ("detour to an empty direct outbound makes
+                // no sense"), а сервер без detour и так резолвит мимо туннеля —
+                // ровно как наш bootstrap.
                 JSONObject().put("type", "https").put("tag", tag)
                     .put("server", hostPart(rest)).put("path", pathPart(rest))
-                    .put("detour", "direct")
             }
             address.startsWith("https://") -> {
                 val rest = address.removePrefix("https://")
