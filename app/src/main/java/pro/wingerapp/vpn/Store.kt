@@ -241,42 +241,48 @@ object Store {
      *
      * По умолчанию «авто».
      */
-    fun lte4Mode(ctx: Context) = prefs(ctx)?.getInt("lte4Mode", Lte4.MODE_AUTO)?.coerceIn(0, 3)
-        ?: Lte4.MODE_AUTO
-
-    fun lte4Mode(ctx: Context, mode: Int) = write(ctx) { putInt("lte4Mode", mode.coerceIn(0, 3)) }
+    /**
+     * Кадровый режим включён всегда и не выбирается: в настройках его больше нет.
+     * Если шлюз его не поддержит, прослойка сама откатится на обычный `/ws`.
+     */
+    fun lte4Mode(ctx: Context): Int = Lte4.MODE_FRAMED
 
     /**
      * Сколько параллельных отправок вниз просить у релея (`f=1cN`).
-     * По замерам релея: 32 — лучший результат (130–150 Мбит/с), 16 — если
-     * телефону не хватает памяти (70–110 Мбит/с), 1 — строгий порядок.
+     *
+     * 32 — лучший замер релея. На слабых телефонах стартуем с меньшего числа, а
+     * прослойка снижает его дальше, если кадры не поднимаются.
      */
-    fun lte4Streams(ctx: Context) = prefs(ctx)?.getInt("lte4Streams", 32)?.coerceIn(1, 32) ?: 32
+    fun lte4Streams(ctx: Context): Int {
+        val stored = prefs(ctx)?.getInt("lte4Streams", 0) ?: 0
+        if (stored in 1..32) return stored
+        val guess = defaultStreams(ctx)
+        write(ctx) { putInt("lte4Streams", guess) }
+        return guess
+    }
 
     fun lte4Streams(ctx: Context, n: Int) = write(ctx) { putInt("lte4Streams", n.coerceIn(1, 32)) }
 
-    /**
-     * Брать правила маршрутизации и DNS из подписки. По умолчанию включено:
-     * в подписках Remnawave лежит готовый роутинг (RU-сайты напрямую, реклама в
-     * блок), и без него эти настройки просто терялись.
-     */
-    fun subRouting(ctx: Context) = prefs(ctx)?.getBoolean("subRouting", true) ?: true
-
-    fun subRouting(ctx: Context, on: Boolean) = write(ctx) { putBoolean("subRouting", on) }
-
-    /**
-     * Один раз после обновления переводим «кадры» в «авто»: на живом трафике
-     * кадры оказались медленнее обычного режима, и оставлять их выбранными
-     * нечестно. Явный выбор после этой миграции сохраняется.
-     */
-    fun migrateLte4Mode(ctx: Context) {
-        val p = prefs(ctx) ?: return
-        if (p.getBoolean("lte4Migrated", false)) return
-        if (p.getInt("lte4Mode", Lte4.MODE_AUTO) == Lte4.MODE_FRAMED) {
-            lte4Mode(ctx, Lte4.MODE_AUTO)
+    /** Стартовое число потоков по памяти устройства. */
+    private fun defaultStreams(ctx: Context): Int = try {
+        val am = ctx.getSystemService(android.app.ActivityManager::class.java)
+        when {
+            am == null -> 32
+            am.isLowRamDevice -> 8
+            am.memoryClass < 192 -> 16
+            else -> 32
         }
-        write(ctx) { putBoolean("lte4Migrated", true) }
+    } catch (_: Throwable) {
+        32
     }
+
+    /**
+     * Маршрутизация и DNS из подписки включены всегда: в подписках Remnawave
+     * лежит готовый роутинг, и выключать его незачем.
+     */
+    fun subRouting(ctx: Context): Boolean = true
+
+
 
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
 

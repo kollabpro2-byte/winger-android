@@ -71,16 +71,6 @@
     <string name="set_core">ЯДРО</string>
     <string name="set_core_log">Подробный лог ядра</string>
     <string name="set_core_log_hint">Нужен, чтобы разобрать, почему нет соединения</string>
-    <string name="set_lte4">Шлюз Яндекса (LTE4)</string>
-    <string name="set_lte4_hint">Только для серверов *.apigw.yandexcloud.net. «Авто» — крупные пачки и выталкивание хвоста по паузе (рекомендуется). «Флаш» — пустое сообщение после каждого, надёжно, но медленнее. «Кадры» — нумерация и порядок, нужна поддержка на сервере. «Выкл» — ядро подключается напрямую</string>
-    <string name="set_lte4_auto">Авто</string>
-    <string name="set_lte4_streams">Потоков вниз (f=1cN)</string>
-    <string name="set_lte4_streams_hint">Только для «Кадров». 32 — лучший замер релея, 16 — если телефону мало памяти, 1 — строгий порядок</string>
-    <string name="set_subroute">Маршрутизация и DNS из подписки</string>
-    <string name="set_subroute_hint">Правила из подписки: сайты напрямую, реклама в блок, свои DNS. Если ядро не примет — отключится само</string>
-    <string name="set_lte4_off">Выкл</string>
-    <string name="set_lte4_flush">Флаш</string>
-    <string name="set_lte4_framed">Кадры</string>
     <string name="set_bypass">БЕЗ ТУННЕЛЯ</string>
     <string name="set_bypass_hint">Эти домены идут напрямую, мимо VPN</string>
     <string name="set_bg">Фон и батарея</string>

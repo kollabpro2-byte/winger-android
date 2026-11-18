@@ -36,12 +36,20 @@ import kotlin.concurrent.thread
  * TLS делает прослойка, поэтому в конфиге ядра для таких серверов нет `tls`.
  */
 internal class Lte4Shim(
-    /** Режим из настроек: [Lte4.MODE_FLUSH] по умолчанию, см. [Lte4Wire]. */
-    private val mode: Int = Lte4.MODE_FLUSH,
-    /** Сколько параллельных отправок вниз просить у релея (`f=1cN`). */
-    private val streams: Int = 1,
+    /** Режим: кадры включены всегда, см. [Store.lte4Mode]. */
+    private val mode: Int = Lte4.MODE_FRAMED,
+    initialStreams: Int = 32,
+    /** Куда сообщить уменьшенное число потоков, чтобы оно пережило перезапуск. */
+    private val onStreamsChanged: (Int) -> Unit = {},
     private val protect: (Socket) -> Boolean,
 ) {
+
+    /**
+     * Сколько параллельных отправок вниз просить у релея (`f=1cN`). Меняется на
+     * лету: если кадры не поднимаются, снижаем — телефон может не тянуть 32.
+     */
+    @Volatile
+    private var streams: Int = initialStreams.coerceIn(1, 32)
 
     private var server: ServerSocket? = null
 
@@ -83,11 +91,23 @@ internal class Lte4Shim(
     @Volatile
     private var framedDisabled = false
 
+    /**
+     * Кадры не поднялись. Сначала снижаем число потоков (32 → 16 → 8): телефон
+     * может не тянуть 32, но кадры ему вполне по силам. И только после шести
+     * неудач уходим на обычный `/ws` — рабочий туннель важнее ускорения.
+     */
     private fun noteFramedFailure() {
         val n = framedFails.incrementAndGet()
-        if (n >= 3 && !framedDisabled) {
+        if (n % 2 == 0 && streams > 8) {
+            val next = if (streams >= 32) 16 else 8
+            streams = next
+            runCatching { onStreamsChanged(next) }
+            VpnLog.add("LTE4 shim: кадры не поднялись ($n) — снижаю потоки до $next")
+            return
+        }
+        if (n >= 6 && !framedDisabled) {
             framedDisabled = true
-            VpnLog.add("LTE4 shim: кадры не поднялись $n раза подряд — перехожу на обычный /ws")
+            VpnLog.add("LTE4 shim: кадры не поднялись $n раз — перехожу на обычный /ws")
         }
     }
 

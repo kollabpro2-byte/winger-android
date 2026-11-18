@@ -30,7 +30,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pro.wingerapp.vpn.BuildConfig
-import pro.wingerapp.vpn.Lte4
 import pro.wingerapp.vpn.R
 import pro.wingerapp.vpn.Store
 import pro.wingerapp.vpn.VpnLog
@@ -151,61 +150,9 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
         }
 
         SettingsSection(s[R.string.set_core], "core" in open, onToggle = { toggle("core") }) {
+            // Выборов режима и потоков здесь больше нет: кадровый режим включён
+            // всегда, а число потоков прослойка подбирает сама под устройство.
             Text("sing-box-lx 1.14.4 (XHTTP)", color = TextMain, fontSize = 14.sp)
-            var lte4 by remember { mutableIntStateOf(Store.lte4Mode(ctx)) }
-            var streams by remember { mutableIntStateOf(Store.lte4Streams(ctx)) }
-            Text(
-                s[R.string.set_lte4], color = OnCard, fontSize = 13.sp,
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            Text(
-                s[R.string.set_lte4_hint], color = Muted, fontSize = 11.sp,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            Row(Modifier.padding(top = 8.dp)) {
-                listOf(
-                    Lte4.MODE_AUTO to s[R.string.set_lte4_auto],
-                    Lte4.MODE_FLUSH to s[R.string.set_lte4_flush],
-                    Lte4.MODE_FRAMED to s[R.string.set_lte4_framed],
-                    Lte4.MODE_OFF to s[R.string.set_lte4_off],
-                ).forEach { (mode, label) ->
-                    Seg(label, lte4 == mode, Modifier.weight(1f)) {
-                        lte4 = mode
-                        Store.lte4Mode(ctx, mode)
-                        onApply()
-                    }
-                }
-            }
-            // Потоки вниз имеют смысл только в кадровом режиме: релей отдаёт
-            // кадры параллельно, клиент их сортирует по seq. Без c — строгий порядок.
-            Text(
-                s[R.string.set_lte4_streams], color = OnCard, fontSize = 13.sp,
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            Text(
-                s[R.string.set_lte4_streams_hint], color = Muted, fontSize = 11.sp,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            Row(Modifier.padding(top = 8.dp)) {
-                listOf(1, 8, 16, 32).forEach { n ->
-                    Seg("$n", streams == n, Modifier.weight(1f)) {
-                        streams = n
-                        Store.lte4Streams(ctx, n)
-                        onApply()
-                    }
-                }
-            }
-            var subRoute by remember { mutableStateOf(Store.subRouting(ctx)) }
-            SwitchRow(
-                s[R.string.set_subroute],
-                s[R.string.set_subroute_hint],
-                subRoute,
-                divider = true,
-            ) {
-                subRoute = it
-                Store.subRouting(ctx, it)
-                onApply()
-            }
             var verbose by remember { mutableStateOf(BuildConfig.CORE_LOG || Store.coreLog(ctx)) }
             SwitchRow(s[R.string.set_core_log], s[R.string.set_core_log_hint], verbose, divider = true) {
                 verbose = it

@@ -71,16 +71,6 @@
     <string name="set_core">CORE</string>
     <string name="set_core_log">Verbose core log</string>
     <string name="set_core_log_hint">Needed to find out why there is no connection</string>
-    <string name="set_lte4">Yandex gateway (LTE4)</string>
-    <string name="set_lte4_hint">Only for *.apigw.yandexcloud.net servers. Auto — large batches and tail push after a pause (recommended). Flush — an empty message after each one, reliable but slower. Frames — sequencing and reordering, needs server support. Off — the core connects directly</string>
-    <string name="set_lte4_auto">Auto</string>
-    <string name="set_lte4_streams">Downstream streams (f=1cN)</string>
-    <string name="set_lte4_streams_hint">Frames only. 32 is the relay\'s best result, 16 if the phone is low on memory, 1 for strict order</string>
-    <string name="set_subroute">Routing and DNS from subscription</string>
-    <string name="set_subroute_hint">Rules from the subscription: direct sites, ad blocking, custom DNS. Disables itself if the core rejects them</string>
-    <string name="set_lte4_off">Off</string>
-    <string name="set_lte4_flush">Flush</string>
-    <string name="set_lte4_framed">Frames</string>
     <string name="set_bypass">NO TUNNEL</string>
     <string name="set_bypass_hint">These domains go straight out, around the VPN</string>
     <string name="set_bg">Background &amp; battery</string>

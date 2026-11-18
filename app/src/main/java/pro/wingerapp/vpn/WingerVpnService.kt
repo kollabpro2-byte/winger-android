@@ -201,15 +201,17 @@ class WingerVpnService : VpnService() {
         // Прослойку поднимаем ДО старта ядра: первое же подключение к
         // 127.0.0.1:port иначе упадёт с «connection refused». В режиме «выкл»
         // её нет вовсе — ядро идёт в шлюз напрямую, как Xray.
-        Store.migrateLte4Mode(this)
         val lte4Mode = Store.lte4Mode(this)
         val lte4Streams = Store.lte4Streams(this)
         val shimPort = if (lte4Mode == Lte4.MODE_OFF) {
             0
         } else {
             runCatching {
-                val s = shim ?: Lte4Shim(lte4Mode, lte4Streams) { socket -> protect(socket) }
-                    .also { shim = it }
+                val s = shim ?: Lte4Shim(
+                    mode = lte4Mode,
+                    initialStreams = lte4Streams,
+                    onStreamsChanged = { n -> Store.lte4Streams(this, n) },
+                ) { socket -> protect(socket) }.also { shim = it }
                 s.start()
             }.getOrElse {
                 VpnLog.add("LTE4 shim: не поднялся (${it.javaClass.simpleName})")
@@ -226,9 +228,9 @@ class WingerVpnService : VpnService() {
         // сохраняет остальные настройки XHTTP (иначе теряется фикс 413).
         val dropped = mutableSetOf<String>()
         var useMinimal = false
-        // Роутинг подписки: при отказе ядра отступаем по шагам — сначала без DNS,
-        // потом совсем без него. Туннель важнее правил.
-        var subRouting = if (Store.subRouting(this)) RoutingPlan.RULES_AND_DNS else RoutingPlan.OFF
+        // Роутинг и DNS из подписки включены всегда; при отказе ядра отступаем
+        // по шагам — сначала без DNS, потом совсем без правил.
+        var subRouting = RoutingPlan.RULES_AND_DNS
         while (true) {
             val sbConfig = try {
                 toSingBox(
