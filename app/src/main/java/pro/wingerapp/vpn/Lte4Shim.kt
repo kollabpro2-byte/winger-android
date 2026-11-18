@@ -1,0 +1,367 @@
+package pro.wingerapp.vpn
+
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.security.MessageDigest
+import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.concurrent.thread
+
+/**
+ * Локальная прослойка «LTE4 shim» между sing-box и Yandex API Gateway.
+ *
+ * Зачем: шлюз принимает WebSocket, но пересылает сообщения в наш сервер
+ * параллельно и вразнобой, а следующее сообщение придерживает до прихода
+ * следующего. VLESS — это байтовый поток, и перемешанные куски ломают его.
+ * Прослойка нумерует каждый кусок (seq), добавляет PING, чтобы выталкивать
+ * застрявшее, и восстанавливает порядок в обратную сторону.
+ *
+ * Схема:
+ * ```
+ * sing-box → ws://127.0.0.1:<port>  →  [shim]  →  wss://<домен шлюза>/<path>
+ * ```
+ * TLS делает прослойка, поэтому в конфиге ядра для таких серверов нет `tls`.
+ */
+internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
+
+    private var server: ServerSocket? = null
+
+    @Volatile
+    private var running = false
+
+    /** Порт локального WS-сервера; 0, пока не запущен. */
+    @Volatile
+    var port: Int = 0
+        private set
+
+    private val live = AtomicInteger(0)
+
+    /**
+     * Сокеты исходящего WSS обязательно защищаем: приложение исключено из
+     * туннеля, но protect() — страховка от петли, если политики изменятся.
+     */
+    private val client = OkHttpClient.Builder()
+        .socketFactory(object : javax.net.SocketFactory() {
+            override fun createSocket(): Socket = Socket().also { protect(it) }
+            override fun createSocket(host: String, port: Int): Socket =
+                Socket(host, port).also { protect(it) }
+            override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+                Socket(host, port, localHost, localPort).also { protect(it) }
+            override fun createSocket(host: InetAddress, port: Int): Socket =
+                Socket(host, port).also { protect(it) }
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+                Socket(address, port, localAddress, localPort).also { protect(it) }
+        })
+        // Свои PING живут в протоколе шлюза, штатный ping OkHttp не нужен.
+        .pingInterval(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    /** Поднимает сервер на 127.0.0.1 и возвращает порт. Бросает, если порт не взят. */
+    fun start(): Int {
+        if (running) return port
+        // Локальный сервер слушает петлю: трафик до sing-box не покидает устройство,
+        // поэтому protect() ему не нужен — защищаем только исходящий WSS.
+        val ss = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        server = ss
+        port = ss.localPort
+        running = true
+        thread(isDaemon = true, name = "lte4-accept") {
+            while (running) {
+                val sock = try {
+                    ss.accept()
+                } catch (_: Throwable) {
+                    break
+                }
+                thread(isDaemon = true, name = "lte4-conn") { serve(sock) }
+            }
+        }
+        VpnLog.add("LTE4 shim слушает 127.0.0.1:$port")
+        return port
+    }
+
+    fun stop() {
+        running = false
+        runCatching { server?.close() }
+        server = null
+        port = 0
+    }
+
+    private fun serve(local: Socket) {
+        live.incrementAndGet()
+        try {
+            local.tcpNoDelay = true
+            local.soTimeout = 0
+            val input = local.getInputStream()
+            val output = local.getOutputStream()
+            val request = readHandshake(input) ?: run {
+                local.close(); return
+            }
+            val gateway = request.host
+            if (!Lte4.isLte4Gateway(gateway)) {
+                VpnLog.add("LTE4 shim: отказ, хост не шлюз Яндекса")
+                local.close(); return
+            }
+            if (!writeHandshake(output, request.key)) {
+                local.close(); return
+            }
+            pumpBoth(local, input, output, request)
+        } catch (e: Throwable) {
+            VpnLog.add("LTE4 shim: соединение закрыто (${e.javaClass.simpleName})")
+        } finally {
+            live.decrementAndGet()
+            runCatching { local.close() }
+        }
+    }
+
+    private data class Handshake(val path: String, val host: String, val key: String)
+
+    /** Состояние одного туннеля: открыт ли, какой следующий seq, когда были данные. */
+    private class ConnState {
+        @Volatile var open = false
+        @Volatile var lastDataAt = System.currentTimeMillis()
+        val seq = AtomicLong(0)
+        var inFrames = 0L
+        var outFrames = 0L
+    }
+
+    private fun readHandshake(input: InputStream): Handshake? {
+        val buf = StringBuilder()
+        val one = ByteArray(1)
+        while (buf.length < 8192) {
+            if (input.read(one) < 0) return null
+            buf.append(one[0].toInt().toChar())
+            if (buf.endsWith("\r\n\r\n")) break
+        }
+        val lines = buf.split("\r\n")
+        val requestLine = lines.firstOrNull()?.split(' ') ?: return null
+        if (requestLine.size < 2 || !requestLine[0].equals("GET", true)) return null
+        val path = requestLine[1]
+        var host = ""
+        var key = ""
+        for (line in lines.drop(1)) {
+            val idx = line.indexOf(':')
+            if (idx <= 0) continue
+            val name = line.substring(0, idx).trim().lowercase()
+            val value = line.substring(idx + 1).trim()
+            when (name) {
+                "host" -> host = value.substringBefore(':')
+                "sec-websocket-key" -> key = value
+            }
+        }
+        if (host.isBlank() || key.isBlank()) return null
+        return Handshake(path, host, key)
+    }
+
+    private fun writeHandshake(out: OutputStream, key: String): Boolean = try {
+        val accept = Base64.getEncoder().encodeToString(
+            MessageDigest.getInstance("SHA-1").digest((key + WS_GUID).toByteArray())
+        )
+        out.write(
+            ("HTTP/1.1 101 Switching Protocols\r\n" +
+                "Upgrade: websocket\r\n" +
+                "Connection: Upgrade\r\n" +
+                "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray()
+        )
+        out.flush()
+        true
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun InputStream.readFully(dst: ByteArray) {
+        var offset = 0
+        while (offset < dst.size) {
+            val n = read(dst, offset, dst.size - offset)
+            if (n < 0) throw java.io.EOFException()
+            offset += n
+        }
+    }
+
+    /** Собирает одно сообщение клиента (с учётом фрагментации), отвечает на ping. */
+    private fun readClientMessage(input: InputStream, output: OutputStream): ByteArray? {
+        var assembled: java.io.ByteArrayOutputStream? = null
+        while (true) {
+            val b0 = input.read()
+            if (b0 < 0) return null
+            val b1 = input.read()
+            if (b1 < 0) return null
+            val fin = b0 and 0x80 != 0
+            val opcode = b0 and 0x0F
+            val masked = b1 and 0x80 != 0
+            var len = (b1 and 0x7F).toLong()
+            if (len == 126L) {
+                len = ((input.read() shl 8) or input.read()).toLong()
+            } else if (len == 127L) {
+                var v = 0L
+                repeat(8) { v = (v shl 8) or input.read().toLong() }
+                len = v
+            }
+            if (len < 0 || len > 1_048_576L) return null
+            val mask = if (masked) ByteArray(4).also { input.readFully(it) } else null
+            val payload = ByteArray(len.toInt()).also { input.readFully(it) }
+            if (mask != null) {
+                for (i in payload.indices) payload[i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
+            }
+            when (opcode) {
+                0x8 -> return null
+                0x9 -> {
+                    writeFrame(output, 0xA, payload)
+                    continue
+                }
+                0xA -> continue
+                0x2, 0x0 -> {
+                    if (assembled == null) assembled = java.io.ByteArrayOutputStream()
+                    assembled.write(payload)
+                    if (fin) return assembled.toByteArray()
+                }
+                else -> continue
+            }
+        }
+    }
+
+    /** Сервер → клиент: без маски, длину пишем по RFC 6455. */
+    private fun writeFrame(out: OutputStream, opcode: Int, payload: ByteArray) {
+        out.write(0x80 or opcode)
+        when {
+            payload.size < 126 -> out.write(payload.size)
+            payload.size < 65536 -> {
+                out.write(126)
+                out.write(payload.size shr 8)
+                out.write(payload.size and 0xFF)
+            }
+            else -> {
+                out.write(127)
+                var len = payload.size.toLong()
+                val bytes = ByteArray(8)
+                for (i in 7 downTo 0) {
+                    bytes[i] = (len and 0xFF).toByte()
+                    len = len shr 8
+                }
+                out.write(bytes)
+            }
+        }
+        out.write(payload)
+        out.flush()
+    }
+
+    private val reorder = ReorderBuffer()
+
+    private companion object {
+        const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    }
+
+    /**
+     * Подключает шлюз и гоняет трафик в обе стороны, пока одна из сторон не закроется.
+     */
+    private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
+        val url = "wss://" + hs.host + hs.path
+        val state = ConnState()
+        val opened = CountDownLatch(1)
+        val ws = client.newWebSocket(
+            Request.Builder().url(url).build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    state.open = true
+                    opened.countDown()
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    onGatewayFrame(bytes.toByteArray(), output, state)
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    state.open = false
+                    runCatching { local.close() }
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    state.open = false
+                    runCatching { local.close() }
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    state.open = false
+                    VpnLog.add("LTE4 shim: WSS ${t.javaClass.simpleName}")
+                    opened.countDown()
+                    runCatching { local.close() }
+                }
+            }
+        )
+        if (!opened.await(12, TimeUnit.SECONDS) || !state.open) {
+            VpnLog.add("LTE4 shim: WSS не открылся за 12 с")
+            runCatching { ws.cancel() }
+            return
+        }
+
+        // PING выталкивает застрявшее в шлюзе сообщение: 300 мс первые 3 с после
+        // последних данных, дальше раз в 5 с — чтобы не закрылось по простою.
+        thread(isDaemon = true, name = "lte4-ping") {
+            while (state.open && running) {
+                val idle = System.currentTimeMillis() - state.lastDataAt
+                Thread.sleep(if (idle < 3000) 300 else 5000)
+                if (!state.open || !running) break
+                ws.send(Lte4.encode(Lte4.TYPE_PING, state.seq.get()).toByteString())
+            }
+        }
+
+        try {
+            while (state.open && running) {
+                val message = readClientMessage(input, output) ?: break
+                var offset = 0
+                while (offset < message.size) {
+                    val size = minOf(Lte4.MAX_CHUNK, message.size - offset)
+                    val chunk = message.copyOfRange(offset, offset + size)
+                    val seq = state.seq.getAndIncrement()
+                    if (!ws.send(Lte4.encode(Lte4.TYPE_DATA, seq, chunk).toByteString())) break
+                    state.lastDataAt = System.currentTimeMillis()
+                    state.outFrames++
+                    offset += size
+                }
+            }
+        } catch (_: Throwable) {
+            // Обрыв любой стороны — закрываем обе.
+        } finally {
+            state.open = false
+            runCatching { ws.close(1000, "bye") }
+            VpnLog.add("LTE4 shim: закрыто, ↑${state.outFrames} ↓${state.inFrames} фреймов")
+        }
+    }
+
+    /** Кадр от шлюза: PING игнорируем, DATA ставим в очередь порядка и отдаём. */
+    private fun onGatewayFrame(bytes: ByteArray, output: OutputStream, state: ConnState) {
+        val frame = Lte4.decode(bytes) ?: return
+        if (frame.type == Lte4.TYPE_PING) return
+        state.inFrames++
+        synchronized(state) {
+            for (payload in reorder.put(frame.seq, frame.payload)) {
+                var offset = 0
+                while (offset < payload.size) {
+                    val size = minOf(Lte4.MAX_CHUNK, payload.size - offset)
+                    writeFrame(output, 0x2, payload.copyOfRange(offset, offset + size))
+                    offset += size
+                }
+            }
+        }
+        if (state.inFrames % 400L == 0L) {
+            VpnLog.add(
+                "LTE4 shim: ↑${state.outFrames} ↓${state.inFrames}, " +
+                    "переупорядочено ${reorder.reordered}, отброшено ${reorder.dropped}, " +
+                    "буфер ${reorder.maxDepth}"
+            )
+        }
+    }
+
+}

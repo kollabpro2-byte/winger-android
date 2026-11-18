@@ -31,6 +31,12 @@ data class TunnelOptions(
      */
     val dropXhttpFields: Set<String> = emptySet(),
     /**
+     * Порт локальной прослойки LTE4. Ноль — прослойка выключена. Для серверов
+     * `*.apigw.yandexcloud.net` ядро ходит не напрямую, а в `127.0.0.1:shimPort`,
+     * а TLS и WebSocket к шлюзу поднимает сама прослойка.
+     */
+    val shimPort: Int = 0,
+    /**
      * Allow IPv6 literals for the proxy address. Off by default: a v6 dial that
      * never answers is indistinguishable from "no internet" in the UI.
      */
@@ -50,7 +56,9 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
     val proxy = firstVless(outbounds)
         ?: error("в подписке нет VLESS-сервера — туннель не поднят")
-    val proxyOutbound = convertVless(proxy, opts.useMux, opts.minimalTransport, opts.dropXhttpFields, opts.ipv6Proxy)
+    val proxyOutbound = convertVless(
+        proxy, opts.useMux, opts.minimalTransport, opts.dropXhttpFields, opts.ipv6Proxy, opts.shimPort,
+    )
     val sb = JSONObject()
     sb.put("log", coreLog(opts.coreLogFile))
     sb.put("dns", dnsSection(opts.dnsServer))
@@ -221,17 +229,34 @@ private fun tunInbound(mtu: Int): JSONObject = JSONObject()
     .put("strict_route", false)
     .put("stack", "gvisor")
 
-private fun convertVless(xray: JSONObject, useMux: Boolean, minimalTransport: Boolean, dropXhttpFields: Set<String> = emptySet(), ipv6Proxy: Boolean = false): JSONObject {
+private fun convertVless(
+    xray: JSONObject,
+    useMux: Boolean,
+    minimalTransport: Boolean,
+    dropXhttpFields: Set<String> = emptySet(),
+    ipv6Proxy: Boolean = false,
+    shimPort: Int = 0,
+): JSONObject {
     val settings = xray.optJSONObject("settings") ?: JSONObject()
     val vnext = settings.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
     val users = vnext.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
     val stream = xray.optJSONObject("streamSettings") ?: JSONObject()
     val network = stream.optString("network", "tcp").lowercase()
+    val address = vnext.optString("address")
+    // Шлюз Яндекса ломает VLESS поверх WS (перемешивает сообщения), поэтому для
+    // него ядро ходит в локальную прослойку, а TLS и WS к шлюзу делает она.
+    val viaShim = shimPort > 0 && network == "ws" && Lte4.isLte4Gateway(address)
+
     val sb = JSONObject()
     sb.put("type", "vless")
     sb.put("tag", "proxy")
-    sb.put("server", resolveServer(vnext.optString("address"), ipv6Proxy))
-    sb.put("server_port", vnext.optInt("port", 443))
+    if (viaShim) {
+        sb.put("server", "127.0.0.1")
+        sb.put("server_port", shimPort)
+    } else {
+        sb.put("server", resolveServer(address, ipv6Proxy))
+        sb.put("server_port", vnext.optInt("port", 443))
+    }
     sb.put("uuid", users.optString("id"))
     val flow = users.optString("flow", "")
     // Vision flow only exists for raw TCP; ws/grpc/xhttp configs that carry it
@@ -242,7 +267,16 @@ private fun convertVless(xray: JSONObject, useMux: Boolean, minimalTransport: Bo
     // Xray по умолчанию гоняет UDP как xudp; если в подписке поле не указано,
     // без него sing-box не умеет UDP через прокси (DNS внутри туннеля, звонки).
     if (sb.optString("packet_encoding").isBlank()) sb.put("packet_encoding", "xudp")
-    val address = vnext.optString("address")
+    if (viaShim) {
+        // До прослойки — обычный ws без TLS: она сама поднимает WSS к шлюзу.
+        // Host = домен шлюза: по нему прослойка понимает, куда подключаться.
+        val ws = stream.optJSONObject("wsSettings") ?: JSONObject()
+        val t = JSONObject().put("type", "ws")
+        ws.optString("path").takeIf { it.isNotBlank() }?.let { t.put("path", it) }
+        t.put("headers", JSONObject().put("Host", address))
+        sb.put("transport", t)
+        return sb
+    }
     // For WebSocket the Host header must be the domain (SNI), not the resolved IP:
     // gateways route by Host, and our `server` field is already an IP.
     val hostForWs = stream.optJSONObject("tlsSettings")?.optString("serverName").orEmpty()

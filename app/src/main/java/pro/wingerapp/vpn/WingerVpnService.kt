@@ -43,6 +43,9 @@ class WingerVpnService : VpnService() {
     private var ifaceListener: InterfaceUpdateListener? = null
     private val rate = LogRate()
 
+    /** Прослойка для шлюзов Яндекса (LTE 4 и подобные). */
+    private var shim: Lte4Shim? = null
+
     /** Файл лога ядра текущей сессии: его подрезает heartbeat, чтобы он не рос. */
     private var coreLogFile: File? = null
 
@@ -195,6 +198,16 @@ class WingerVpnService : VpnService() {
         val logFile = if (coreLog) File(filesDir, "singbox.log").absolutePath else null
         coreLogFile = logFile?.let { File(it) }
 
+        // Прослойку поднимаем ДО старта ядра: первое же подключение к
+        // 127.0.0.1:port иначе упадёт с «connection refused».
+        val shimPort = runCatching {
+            val s = shim ?: Lte4Shim { socket -> protect(socket) }.also { shim = it }
+            s.start()
+        }.getOrElse {
+            VpnLog.add("LTE4 shim: не поднялся (${it.javaClass.simpleName})")
+            0
+        }
+
         // A single unknown JSON field makes the core reject the whole config and
         // the user is left without a VPN, so retry once without the optional
         // XHTTP knobs instead of only reporting the decode error.
@@ -217,6 +230,7 @@ class WingerVpnService : VpnService() {
                         minimalTransport = useMinimal,
                         dropXhttpFields = dropped,
                         ipv6Proxy = Store.ipv6Proxy(this),
+                        shimPort = shimPort,
                     ),
                 )
             } catch (e: Throwable) {
@@ -335,6 +349,9 @@ class WingerVpnService : VpnService() {
     }
 
     private fun stopCore(restarting: Boolean = false) {
+        // Прослойка LTE4 держит исходящий WSS: закрываем вместе с ядром.
+        runCatching { shim?.stop() }
+        shim = null
         runCatching { singServer?.closeService() }.onFailure { VpnLog.add("closeService: ${err(it)}") }
         runCatching { singServer?.close() }.onFailure { VpnLog.add("server.close: ${err(it)}") }
         singServer = null

@@ -145,6 +145,31 @@ class TunnelConfigTest {
     }
 
     @Test
+    fun lte4GatewayGoesThroughLocalShimWithoutTls() {
+        // Кейс LTE 4: VLESS + WS + TLS через Yandex API Gateway. Ядро ходит в
+        // локальную прослойку по ws (без TLS), а она сама поднимает WSS к шлюзу.
+        val ws = """{"path":"/ws?ed=2048"}"""
+        val tls = """{"serverName":"gw.apigw.yandexcloud.net"}"""
+        val json = node(
+            network = "ws", security = "tls",
+            address = "gw.apigw.yandexcloud.net", ws = ws, tls = tls,
+        )
+        val proxy = proxy(pipe(json, TunnelOptions(shimPort = 45678)))
+
+        assertEquals("127.0.0.1", proxy.getString("server"))
+        assertEquals(45678, proxy.getInt("server_port"))
+        assertNull(proxy.opt("tls"))
+        assertNull(proxy.opt("multiplex"))
+        assertNull(proxy.opt("flow"))
+
+        val transport = proxy.getJSONObject("transport")
+        assertEquals("ws", transport.getString("type"))
+        assertEquals("/ws?ed=2048", transport.getString("path"))
+        assertEquals("gw.apigw.yandexcloud.net", transport.getJSONObject("headers").getString("Host"))
+        assertEquals("xudp", proxy.getString("packet_encoding"))
+    }
+
+    @Test
     fun wsWithoutAlpnGetsHttp11AndHostFromSni() {
         // Реальный кейс LTE 4: Yandex API Gateway, VLESS + WS + TLS, в ссылке нет
         // ни ALPN, ни headers.Host. Без ALPN= http/1.1 шлюз не делает upgrade,

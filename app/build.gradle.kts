@@ -27,7 +27,7 @@ android {
         applicationId = "pro.wingerapp.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 119
+        versionCode = 120
         versionName = "0.1.75"
     }
     // libbox.so is ~80 MB per ABI: ship one APK per architecture instead of a
@@ -91,6 +91,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.security:security-crypto:1.0.0")
+    // OkHttp нужен прослойке LTE4: исходящее WSS к шлюзу Яндекса.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Применяет Baseline Profile при установке/обновлении, в том числе когда APK
     // ставится вручную (без Google Play).
     implementation("androidx.profileinstaller:profileinstaller:1.4.0")
