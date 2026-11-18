@@ -86,6 +86,67 @@ internal object Lte4 {
         MODE_AUTO -> "авто"
         else -> "?"
     }
+
+    /**
+     * Кадровый режим на релее включается параметром в path: `/ws?f=1`.
+     * Без него релей работает как обычный VLESS-WS, поэтому добавляем сами.
+     */
+    fun framedPath(path: String): String {
+        val p = path.trim().ifBlank { "/ws" }
+        if (p.contains("f=1")) return p
+        return if (p.contains('?')) "$p&f=1" else "$p?f=1"
+    }
+}
+
+/**
+ * Расписание «толкачей» для батч-режимов.
+ *
+ * По замерам на релее: сразу после пачки толкач залипает вместе с хвостом,
+ * поэтому первый идёт через [firstDelayMs]; примерно в 10 % случаев залипает и
+ * сам толкач, поэтому повторяем через 50, 150 и 400 мс, пока не придут новые
+ * данные. Пришли данные — расписание сбрасывается.
+ */
+internal class TailPusher(private val firstDelayMs: Long = 15) {
+
+    /** Смещения повторов (мс) от предыдущего толкача; 0 — это и есть первый. */
+    private val retries = longArrayOf(0, 50, 150, 400)
+
+    /** -1 — нечего толкать, иначе индекс следующего повтора. */
+    private var stage = -1
+    private var nextAt = 0L
+
+    /** Сколько толкачей реально ушло (для лога). */
+    var sent: Long = 0L
+        private set
+
+    /** Пришли новые данные — запланированные толкачи больше не нужны. */
+    fun onData() {
+        stage = -1
+        nextAt = 0L
+    }
+
+    /** Отправили пачку — планируем выталкивание хвоста. */
+    fun onBatchSent(nowMs: Long) {
+        stage = 0
+        nextAt = nowMs + firstDelayMs
+    }
+
+    /** Когда пора толкать; -1 — не запланировано. */
+    fun dueAt(): Long = if (stage < 0) -1L else nextAt
+
+    /** Пора? Если да — сдвигает расписание на следующий повтор. */
+    fun takeIfDue(nowMs: Long): Boolean {
+        if (stage < 0 || nowMs < nextAt) return false
+        sent++
+        stage++
+        if (stage >= retries.size) {
+            stage = -1
+            nextAt = 0L
+        } else {
+            nextAt = nowMs + retries[stage]
+        }
+        return true
+    }
 }
 
 /**
@@ -201,11 +262,16 @@ internal class AutoUplink(
  * Шлюз может прислать seq 5 раньше 4 и «придержать» последний, пока не придёт
  * следующий. Держим пришедшие не по порядку и отдаём строго по возрастанию.
  */
-internal class ReorderBuffer(private val maxBuffered: Int = 512) {
+internal class ReorderBuffer(
+    private val maxBuffered: Int = 2048,
+    /** Потолок по памяти: релей держит до 16 МБ, телефону хватит 8 МБ. */
+    private val maxBufferedBytes: Long = 8L * 1024 * 1024,
+) {
     private val pending = java.util.TreeMap<Long, ByteArray>()
     /** Когда кадр пришёл — по нему считаем, сколько он прождал «дыру» в seq. */
     private val arrivedAt = HashMap<Long, Long>()
     private var nextSeq = 0L
+    private var pendingBytes = 0L
 
     /** Сколько раз кадр пришёл раньше предыдущего (счётчик для лога). */
     var reordered: Long = 0L
@@ -235,13 +301,15 @@ internal class ReorderBuffer(private val maxBuffered: Int = 512) {
         }
         if (seq > nextSeq) reordered++
         pending[seq] = payload
+        pendingBytes += payload.size
         arrivedAt[seq] = nowMs
         if (pending.size > maxDepth) maxDepth = pending.size
-        if (pending.size > maxBuffered) {
+        if (pending.size > maxBuffered || pendingBytes > maxBufferedBytes) {
             // Защита от «дыры»: если предыдущий кадр потерян, дальше ждать нечего.
             dropped += pending.size
             pending.clear()
             arrivedAt.clear()
+            pendingBytes = 0L
             lastWaitMs = 0L
             nextSeq = seq + 1
             return listOf(payload)
@@ -249,6 +317,7 @@ internal class ReorderBuffer(private val maxBuffered: Int = 512) {
         val out = ArrayList<ByteArray>(4)
         while (true) {
             val head = pending.remove(nextSeq) ?: break
+            pendingBytes -= head.size
             val arrived = arrivedAt.remove(nextSeq) ?: nowMs
             lastWaitMs = (nowMs - arrived).coerceAtLeast(0L)
             if (lastWaitMs > maxWaitMs) maxWaitMs = lastWaitMs

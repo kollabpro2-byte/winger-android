@@ -65,6 +65,41 @@ class Lte4FramesTest {
     }
 
     @Test
+    fun framedPathAddsFlagOnce() {
+        assertEquals("/ws?f=1", Lte4.framedPath("/ws"))
+        assertEquals("/ws?a=1&f=1", Lte4.framedPath("/ws?a=1"))
+        assertEquals("/ws?f=1", Lte4.framedPath("/ws?f=1"))
+        assertEquals("/ws?f=1", Lte4.framedPath(""))
+    }
+
+    /**
+     * Расписание с релея: первый толкач через 15 мс тишины, повторы через
+     * 50 / 150 / 400 мс. Сразу после пачки толкач залипает вместе с хвостом.
+     */
+    @Test
+    fun tailPusherFollowsRelaySchedule() {
+        val p = TailPusher(firstDelayMs = 15)
+        p.onBatchSent(1_000)
+        assertFalse(p.takeIfDue(1_010))
+        assertTrue(p.takeIfDue(1_015))
+        assertFalse(p.takeIfDue(1_060))
+        assertTrue(p.takeIfDue(1_065))
+        assertTrue(p.takeIfDue(1_215))
+        assertTrue(p.takeIfDue(1_615))
+        assertFalse(p.takeIfDue(5_000))
+        assertEquals(4L, p.sent)
+    }
+
+    @Test
+    fun newDataCancelsScheduledPushers() {
+        val p = TailPusher()
+        p.onBatchSent(1_000)
+        p.onData()
+        assertFalse(p.takeIfDue(2_000))
+        assertEquals(0L, p.sent)
+    }
+
+    @Test
     fun waitingTimeIsMeasuredForHeldFrames() {
         val buffer = ReorderBuffer()
         buffer.put(0, "a".toByteArray(), nowMs = 1_000)
