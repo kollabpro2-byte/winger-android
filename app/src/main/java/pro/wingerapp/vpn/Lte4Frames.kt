@@ -67,6 +67,8 @@ internal object Lte4 {
  */
 internal class ReorderBuffer(private val maxBuffered: Int = 512) {
     private val pending = java.util.TreeMap<Long, ByteArray>()
+    /** Когда кадр пришёл — по нему считаем, сколько он прождал «дыру» в seq. */
+    private val arrivedAt = HashMap<Long, Long>()
     private var nextSeq = 0L
 
     /** Сколько раз кадр пришёл раньше предыдущего (счётчик для лога). */
@@ -81,25 +83,39 @@ internal class ReorderBuffer(private val maxBuffered: Int = 512) {
     var maxDepth: Int = 0
         private set
 
+    /** Сколько прождал последний отданный кадр, мс. Видно «пачки» шлюза. */
+    var lastWaitMs: Long = 0L
+        private set
+
+    /** Худшее ожидание за сессию, мс. */
+    var maxWaitMs: Long = 0L
+        private set
+
     /** Кладёт кадр и возвращает всё, что теперь можно отдать по порядку. */
-    fun put(seq: Long, payload: ByteArray): List<ByteArray> {
+    fun put(seq: Long, payload: ByteArray, nowMs: Long = System.currentTimeMillis()): List<ByteArray> {
         if (seq < nextSeq) {
             dropped++
             return emptyList()
         }
         if (seq > nextSeq) reordered++
         pending[seq] = payload
+        arrivedAt[seq] = nowMs
         if (pending.size > maxDepth) maxDepth = pending.size
         if (pending.size > maxBuffered) {
             // Защита от «дыры»: если предыдущий кадр потерян, дальше ждать нечего.
             dropped += pending.size
             pending.clear()
+            arrivedAt.clear()
+            lastWaitMs = 0L
             nextSeq = seq + 1
             return listOf(payload)
         }
         val out = ArrayList<ByteArray>(4)
         while (true) {
             val head = pending.remove(nextSeq) ?: break
+            val arrived = arrivedAt.remove(nextSeq) ?: nowMs
+            lastWaitMs = (nowMs - arrived).coerceAtLeast(0L)
+            if (lastWaitMs > maxWaitMs) maxWaitMs = lastWaitMs
             out += head
             nextSeq++
         }

@@ -129,12 +129,19 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
     private data class Handshake(val path: String, val host: String, val key: String)
 
     /** Состояние одного туннеля: открыт ли, какой следующий seq, когда были данные. */
-    private class ConnState {
+    internal class ConnState {
         @Volatile var open = false
         @Volatile var lastDataAt = System.currentTimeMillis()
         val seq = AtomicLong(0)
         var inFrames = 0L
         var outFrames = 0L
+
+        /**
+         * Свой буфер порядка на каждое соединение: seq начинается с 0 у каждой
+         * новой сессии, поэтому общий буфер отбрасывал бы кадры второй сессии
+         * как «старые».
+         */
+        val reorder = ReorderBuffer()
     }
 
     private fun readHandshake(input: InputStream): Handshake? {
@@ -257,8 +264,6 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         out.flush()
     }
 
-    private val reorder = ReorderBuffer()
-
     private companion object {
         const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     }
@@ -318,14 +323,16 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         }
 
         try {
-            while (state.open && running) {
+            read@ while (state.open && running) {
                 val message = readClientMessage(input, output) ?: break
                 var offset = 0
                 while (offset < message.size) {
                     val size = minOf(Lte4.MAX_CHUNK, message.size - offset)
                     val chunk = message.copyOfRange(offset, offset + size)
                     val seq = state.seq.getAndIncrement()
-                    if (!ws.send(Lte4.encode(Lte4.TYPE_DATA, seq, chunk).toByteString())) break
+                    // send() == false значит соединение уже закрывается: добивать
+                    // остаток сообщения бессмысленно, выходим из чтения целиком.
+                    if (!ws.send(Lte4.encode(Lte4.TYPE_DATA, seq, chunk).toByteString())) break@read
                     state.lastDataAt = System.currentTimeMillis()
                     state.outFrames++
                     offset += size
@@ -346,7 +353,7 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         if (frame.type == Lte4.TYPE_PING) return
         state.inFrames++
         synchronized(state) {
-            for (payload in reorder.put(frame.seq, frame.payload)) {
+            for (payload in state.reorder.put(frame.seq, frame.payload)) {
                 var offset = 0
                 while (offset < payload.size) {
                     val size = minOf(Lte4.MAX_CHUNK, payload.size - offset)
@@ -358,8 +365,9 @@ internal class Lte4Shim(private val protect: (Socket) -> Boolean) {
         if (state.inFrames % 400L == 0L) {
             VpnLog.add(
                 "LTE4 shim: ↑${state.outFrames} ↓${state.inFrames}, " +
-                    "переупорядочено ${reorder.reordered}, отброшено ${reorder.dropped}, " +
-                    "буфер ${reorder.maxDepth}"
+                    "переупорядочено ${state.reorder.reordered}, отброшено ${state.reorder.dropped}, " +
+                    "буфер ${state.reorder.maxDepth}, " +
+                    "ожидание ${state.reorder.lastWaitMs}/${state.reorder.maxWaitMs} мс"
             )
         }
     }

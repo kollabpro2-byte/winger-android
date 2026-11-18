@@ -2,6 +2,7 @@ package pro.wingerapp.vpn
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +64,19 @@ class Lte4FramesTest {
     }
 
     @Test
+    fun waitingTimeIsMeasuredForHeldFrames() {
+        val buffer = ReorderBuffer()
+        buffer.put(0, "a".toByteArray(), nowMs = 1_000)
+        // 2 пришёл, но ждёт «дыру» на месте 1.
+        assertTrue(buffer.put(2, "c".toByteArray(), nowMs = 1_010).isEmpty())
+        val out = buffer.put(1, "b".toByteArray(), nowMs = 1_050)
+        assertEquals(listOf("b", "c"), out.map { String(it) })
+        // «c» прождал 1050 − 1010 = 40 мс — это и есть задержка шлюза.
+        assertEquals(40L, buffer.lastWaitMs)
+        assertEquals(40L, buffer.maxWaitMs)
+    }
+
+    @Test
     fun gatewayIsRecognisedOnlyForYandexApigw() {
         assertTrue(Lte4.isLte4Gateway("gw.apigw.yandexcloud.net"))
         assertTrue(Lte4.isLte4Gateway("ABC.apigw.yandexcloud.net"))
@@ -74,5 +88,24 @@ class Lte4FramesTest {
     @Test
     fun chunkLimitRespectsFramesOf32Kb() {
         assertEquals(32 * 1024, Lte4.MAX_CHUNK)
+    }
+
+    /**
+     * Регрессия: буфер порядка раньше был один на всю прослойку. Вторая сессия
+     * тоже начинает с seq 0, и все её кадры отбрасывались как «уже отданные».
+     * Теперь буфер принадлежит соединению.
+     */
+    @Test
+    fun everyConnectionStartsWithItsOwnOrderState() {
+        val first = Lte4Shim.ConnState()
+        repeat(4) { first.reorder.put(it.toLong(), byteArrayOf(it.toByte())) }
+        assertTrue(first.reorder.put(4, byteArrayOf(4)).isNotEmpty())
+
+        val second = Lte4Shim.ConnState()
+        assertNotSame(first.reorder, second.reorder)
+        // Свежая сессия принимает seq 0 и ничего не отбрасывает.
+        assertEquals(1, second.reorder.put(0, byteArrayOf(9)).size)
+        assertEquals(0L, second.reorder.dropped)
+        assertEquals(0L, second.seq.get())
     }
 }
