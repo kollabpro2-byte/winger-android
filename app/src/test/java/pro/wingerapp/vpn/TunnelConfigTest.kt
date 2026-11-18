@@ -146,9 +146,10 @@ class TunnelConfigTest {
 
     @Test
     fun lte4GatewayGoesThroughLocalShimWithoutTls() {
-        // Кейс LTE 4: VLESS + WS + TLS через Yandex API Gateway. Ядро ходит в
-        // локальную прослойку по ws (без TLS), а она сама поднимает WSS к шлюзу.
-        val ws = """{"path":"/ws?ed=2048"}"""
+        // Кейс LTE 4: VLESS + WS + TLS через Yandex API Gateway, path ровно /ws.
+        // Ядро ходит в локальную прослойку по ws (без TLS), а она сама поднимает
+        // WSS к шлюзу и добавляет к пути кадровый режим (?f=1cN).
+        val ws = """{"path":"/ws"}"""
         val tls = """{"serverName":"gw.apigw.yandexcloud.net"}"""
         val json = node(
             network = "ws", security = "tls",
@@ -164,9 +165,27 @@ class TunnelConfigTest {
 
         val transport = proxy.getJSONObject("transport")
         assertEquals("ws", transport.getString("type"))
-        assertEquals("/ws?ed=2048", transport.getString("path"))
+        assertEquals("/ws", transport.getString("path"))
         assertEquals("gw.apigw.yandexcloud.net", transport.getJSONObject("headers").getString("Host"))
         assertEquals("xudp", proxy.getString("packet_encoding"))
+    }
+
+    @Test
+    fun gatewayWithCustomPathStaysPlainWebSocket() {
+        // Спека: кадры только для path=/ws. Любой другой путь — обычный
+        // VLESS-WS напрямую, без прослойки: мы не переписываем чужой путь.
+        val ws = """{"path":"/custom"}"""
+        val tls = """{"serverName":"gw.apigw.yandexcloud.net"}"""
+        val json = node(
+            network = "ws", security = "tls",
+            address = "gw.apigw.yandexcloud.net", ws = ws, tls = tls,
+        )
+        val proxy = proxy(pipe(json, TunnelOptions(shimPort = 45678)))
+
+        assertFalse("127.0.0.1" == proxy.getString("server"))
+        assertEquals(443, proxy.getInt("server_port"))
+        assertTrue(proxy.has("tls"))
+        assertEquals("/custom", proxy.getJSONObject("transport").getString("path"))
     }
 
     @Test

@@ -58,6 +58,16 @@ internal object Lte4 {
         return h == "apigw.yandexcloud.net" || h.endsWith(".apigw.yandexcloud.net")
     }
 
+    /**
+     * Прослойка включается только для path=/ws — так хост приходит в подписке.
+     * Любой другой путь (например `/ws?ed=2048`) — обычный VLESS-WS без кадров:
+     * иначе мы бы переписывали путь, который задал он.
+     */
+    fun isGatewayPath(path: String): Boolean {
+        val p = path.trim()
+        return p == "/ws" || p == "/ws/"
+    }
+
     /** Прослойка выключена: ядро ходит в шлюз напрямую, как Xray. */
     const val MODE_OFF: Int = 0
 
@@ -298,26 +308,44 @@ internal class ReorderBuffer(
     var maxWaitMs: Long = 0L
         private set
 
+    /**
+     * Переполнение буфера: держать дальше нельзя, соединение надо пересоздать.
+     * По спецификации релея пропусков не бывает — кадр либо дойдёт, либо релей
+     * сам закроет соединение, поэтому «прыжок через дырку» тут недопустим.
+     */
+    @Volatile
+    var overflowed: Boolean = false
+        private set
+
+    /** Когда впервые появилась незакрытая дырка в seq (0 — дырки нет). */
+    private var gapSince: Long = 0L
+
+    /** Дырка не закрывается дольше [timeoutMs] — соединение надо пересоздать. */
+    @Synchronized
+    fun isStalled(nowMs: Long, timeoutMs: Long): Boolean {
+        if (gapSince == 0L || pending.isEmpty()) return false
+        return nowMs - gapSince >= timeoutMs
+    }
+
     /** Кладёт кадр и возвращает всё, что теперь можно отдать по порядку. */
     fun put(seq: Long, payload: ByteArray, nowMs: Long = System.currentTimeMillis()): List<ByteArray> {
         if (seq < nextSeq) {
             dropped++
             return emptyList()
         }
-        if (seq > nextSeq) reordered++
+        if (seq > nextSeq) {
+            reordered++
+            if (gapSince == 0L) gapSince = nowMs
+        }
         pending[seq] = payload
         pendingBytes += payload.size
         arrivedAt[seq] = nowMs
         if (pending.size > maxDepth) maxDepth = pending.size
         if (pending.size > maxBuffered || pendingBytes > maxBufferedBytes) {
-            // Защита от «дыры»: если предыдущий кадр потерян, дальше ждать нечего.
-            dropped += pending.size
-            pending.clear()
-            arrivedAt.clear()
-            pendingBytes = 0L
-            lastWaitMs = 0L
-            nextSeq = seq + 1
-            return listOf(payload)
+            // Не прыгаем через дырку: по спецификации релея пропусков не бывает,
+            // значит мы что-то потеряли и соединение надо пересоздать.
+            overflowed = true
+            return emptyList()
         }
         val out = ArrayList<ByteArray>(4)
         while (true) {
@@ -329,6 +357,8 @@ internal class ReorderBuffer(
             out += head
             nextSeq++
         }
+        // Дырки нет, если после выдачи буфер пуст.
+        if (pending.isEmpty()) gapSince = 0L
         return out
     }
 }

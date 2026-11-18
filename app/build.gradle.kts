@@ -27,7 +27,7 @@ android {
         applicationId = "pro.wingerapp.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 127
+        versionCode = 128
         versionName = "0.1.75"
     }
     // libbox.so is ~80 MB per ABI: ship one APK per architecture instead of a

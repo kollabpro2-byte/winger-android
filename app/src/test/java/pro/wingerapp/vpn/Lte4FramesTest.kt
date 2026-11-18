@@ -105,6 +105,30 @@ class Lte4FramesTest {
         assertEquals(0L, p.sent)
     }
 
+    /**
+     * Переполнение буфера по спецификации релея — это наша потеря кадра, а не
+     * повод «прыгнуть» дальше: соединение надо пересоздать.
+     */
+    @Test
+    fun reorderOverflowAsksToReconnect() {
+        val buffer = ReorderBuffer(maxBuffered = 4, maxBufferedBytes = 64)
+        // Дырка на seq 0: копим 2..6, буфер переполняется.
+        for (seq in 2L..6L) buffer.put(seq, ByteArray(8), nowMs = seq)
+        assertTrue(buffer.overflowed)
+    }
+
+    @Test
+    fun stalledGapIsDetectedAfterTimeout() {
+        val buffer = ReorderBuffer()
+        // Кадр 1 пришёл раньше 0 — ждём дырку.
+        assertTrue(buffer.put(1, byteArrayOf(1), nowMs = 1_000).isEmpty())
+        assertFalse(buffer.isStalled(nowMs = 12_000, timeoutMs = 15_000))
+        assertTrue(buffer.isStalled(nowMs = 16_000, timeoutMs = 15_000))
+        // Пришёл пропущенный — отдаём 0 и 1, ожидание сбрасывается.
+        assertEquals(2, buffer.put(0, byteArrayOf(0), nowMs = 16_500).size)
+        assertFalse(buffer.isStalled(nowMs = 40_000, timeoutMs = 15_000))
+    }
+
     @Test
     fun waitingTimeIsMeasuredForHeldFrames() {
         val buffer = ReorderBuffer()
@@ -125,6 +149,15 @@ class Lte4FramesTest {
         assertFalse(Lte4.isLte4Gateway("apigw.yandexcloud.net.evil.com"))
         assertFalse(Lte4.isLte4Gateway("my.wingerapp.pro"))
         assertFalse(Lte4.isLte4Gateway(""))
+    }
+
+    @Test
+    fun gatewayPathIsOnlyWs() {
+        assertTrue(Lte4.isGatewayPath("/ws"))
+        assertTrue(Lte4.isGatewayPath("/ws/"))
+        assertFalse(Lte4.isGatewayPath("/ws?ed=2048"))
+        assertFalse(Lte4.isGatewayPath("/custom"))
+        assertFalse(Lte4.isGatewayPath(""))
     }
 
     @Test

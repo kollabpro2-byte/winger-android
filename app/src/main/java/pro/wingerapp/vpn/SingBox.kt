@@ -245,7 +245,11 @@ private fun convertVless(
     val address = vnext.optString("address")
     // Шлюз Яндекса ломает VLESS поверх WS (перемешивает сообщения), поэтому для
     // него ядро ходит в локальную прослойку, а TLS и WS к шлюзу делает она.
-    val viaShim = shimPort > 0 && network == "ws" && Lte4.isLte4Gateway(address)
+    // Только ровно тот случай, что описан в подписке LTE 4: домен шлюза и
+    // path=/ws. Любой другой path — обычный VLESS-WS, как у всех остальных.
+    val wsPath = stream.optJSONObject("wsSettings")?.optString("path").orEmpty()
+    val viaShim = shimPort > 0 && network == "ws" &&
+        Lte4.isLte4Gateway(address) && Lte4.isGatewayPath(wsPath)
 
     val sb = JSONObject()
     sb.put("type", "vless")

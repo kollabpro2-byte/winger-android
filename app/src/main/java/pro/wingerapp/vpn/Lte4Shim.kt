@@ -73,6 +73,24 @@ internal class Lte4Shim(
     /** Отказы по потолку соединений: логируем редко, иначе шторм забьёт журнал. */
     private val refusals = AtomicInteger(0)
 
+    /** Сколько раз подряд кадровое соединение не поднялось (таймаут или ошибка). */
+    private val framedFails = AtomicInteger(0)
+
+    /**
+     * Кадры отключены до перезапуска сервиса: три неудачи подряд — и хост идёт
+     * обычным /ws. Лучше рабочий туннель без ускорения, чем цикл переподключений.
+     */
+    @Volatile
+    private var framedDisabled = false
+
+    private fun noteFramedFailure() {
+        val n = framedFails.incrementAndGet()
+        if (n >= 3 && !framedDisabled) {
+            framedDisabled = true
+            VpnLog.add("LTE4 shim: кадры не поднялись $n раза подряд — перехожу на обычный /ws")
+        }
+    }
+
     /**
      * Сокеты исходящего WSS обязательно защищаем: приложение исключено из
      * туннеля, но protect() — страховка от петли, если политики изменятся.
@@ -213,6 +231,10 @@ internal class Lte4Shim(
     internal class ConnState {
         @Volatile var open = false
         @Volatile var lastDataAt = System.currentTimeMillis()
+        /** Любая активность (отправка или приём) — по ней выбираем частоту PING. */
+        @Volatile var lastActivityAt = System.currentTimeMillis()
+        /** Когда последний раз уходил PING-толкач. */
+        @Volatile var lastPingAt = 0L
         val seq = AtomicLong(0)
         var inFrames = 0L
         var outFrames = 0L
@@ -375,6 +397,20 @@ internal class Lte4Shim(
          * в минуту дешевле, чем переподключение и потерянные запросы.
          */
         const val IDLE_KEEPALIVE_MS = 60_000L
+
+        /** PING раз в секунду, пока канал активен — так просит спецификация. */
+        const val PING_ACTIVE_MS = 1_000L
+
+        /** Сколько после последней активности считаем канал «горячим». */
+        const val ACTIVE_WINDOW_MS = 3_000L
+
+        /**
+         * Дырка в нумерации, после которой соединение пересоздаётся.
+         * По спецификации релея пропусков не бывает: кадр либо доходит, либо
+         * релей сам закрывает соединение, поэтому 15 с ожидания — это уже наша
+         * потеря, и тянуть дальше нет смысла.
+         */
+        const val GAP_TIMEOUT_MS = 15_000L
     }
 
     /**
@@ -385,8 +421,11 @@ internal class Lte4Shim(
      */
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
         val startedAt = System.currentTimeMillis()
-        // Кадровый режим на релее включается параметром в path: /ws?f=1c32.
-        val path = if (mode == Lte4.MODE_FRAMED) Lte4.framedPath(hs.path, streams) else hs.path
+        // Кадровый режим включается параметром в path: /ws?f=1c32. Если кадры
+        // уже трижды не поднялись, этот хост идёт обычным /ws (как раньше), но
+        // всё равно через прослойку — она лишь склеивает пачки и толкает хвост.
+        val useFramed = mode == Lte4.MODE_FRAMED && !framedDisabled
+        val path = if (useFramed) Lte4.framedPath(hs.path, streams) else hs.path
         val url = "wss://" + hs.host + path
         val state = ConnState()
         val opened = CountDownLatch(1)
@@ -428,13 +467,20 @@ internal class Lte4Shim(
             }
         )
         websockets += ws
-        if (!opened.await(12, TimeUnit.SECONDS) || !state.open) {
-            VpnLog.add("LTE4 shim: WSS не открылся за 12 с")
+        // Кадрам даём 5 секунд (по спецификации), обычному пути — 12: там TLS
+        // поднимает уже сам шлюз и на плохой сети это дольше.
+        val openTimeout = if (useFramed) 5L else 12L
+        if (!opened.await(openTimeout, TimeUnit.SECONDS) || !state.open) {
+            VpnLog.add("LTE4 shim: WSS не открылся за $openTimeout с")
             websockets -= ws
             runCatching { ws.cancel() }
+            if (useFramed) noteFramedFailure()
             return
         }
-        VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}, path ${hs.path}")
+        if (useFramed) framedFails.set(0)
+        VpnLog.add(
+            "LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}, path $path"
+        )
 
         // Батч-режимы: «авто» (сырые байты) и «кадры». Данные копятся в пачки, но
         // шлюзу они уходят с паузами: по замерам релея, если слать сообщения
@@ -442,7 +488,7 @@ internal class Lte4Shim(
         // Именно это и делало кадры медленными — теперь кадры идут по одному,
         // не чаще раза в FRAME_GAP_MS.
         val batched = mode == Lte4.MODE_AUTO || mode == Lte4.MODE_FRAMED
-        val framed = mode == Lte4.MODE_FRAMED
+        val framed = useFramed
         val upLock = Any()
         val autoUp = if (batched) AutoUplink(maxBatch = FRAME_PAYLOAD, idleMs = 15) else null
         val pusher = if (batched) TailPusher() else null
@@ -502,6 +548,17 @@ internal class Lte4Shim(
                 synchronized(upLock) {
                     if (state.open) {
                         val now = System.currentTimeMillis()
+                        // Дырка в нумерации или переполнение буфера: по спецификации
+                        // релея пропусков не бывает, значит кадр потерян — соединение
+                        // надо пересоздать, а не тянуть дальше кривой поток.
+                        if (useFramed && (state.reorder.overflowed ||
+                                state.reorder.isStalled(now, GAP_TIMEOUT_MS))
+                        ) {
+                            val why = if (state.reorder.overflowed) "переполнение буфера"
+                            else "дырка в нумерации дольше ${GAP_TIMEOUT_MS / 1000} с"
+                            VpnLog.add("LTE4 shim: $why — пересоздаю соединение")
+                            state.open = false
+                        } else
                         // Пока в очереди есть кадры, толкачи не нужны: хвост не ушёл.
                         if (!pumpFramesLocked(now)) {
                             val parts = upForTick.flushIfIdle(now)
@@ -509,12 +566,17 @@ internal class Lte4Shim(
                                 deliverLocked(parts)
                             } else if (pushForTick.takeIfDue(now)) {
                                 if (!ws.send(pusherMessage())) state.open = false
-                            } else if (now - state.lastDataAt >= IDLE_KEEPALIVE_MS) {
-                                // Шлюз рвёт простой через 10 минут, а NAT — раньше.
-                                // PING/пустое сообщение релей игнорирует, зато
-                                // соединение остаётся живым и не переподключается.
-                                if (!ws.send(pusherMessage())) state.open = false
-                                state.lastDataAt = now
+                                state.lastPingAt = now
+                            } else {
+                                // PING раз в секунду, пока канал активен, и раз в
+                                // минуту в простое: держит NAT и простой шлюза.
+                                val idle = now - state.lastActivityAt
+                                val interval = if (idle < ACTIVE_WINDOW_MS) PING_ACTIVE_MS
+                                else IDLE_KEEPALIVE_MS
+                                if (now - state.lastPingAt >= interval) {
+                                    if (!ws.send(pusherMessage())) state.open = false
+                                    state.lastPingAt = now
+                                }
                             }
                         }
                     }
@@ -567,6 +629,7 @@ internal class Lte4Shim(
                         if (!ok) break@read
                     }
                     state.lastDataAt = System.currentTimeMillis()
+                    state.lastActivityAt = state.lastDataAt
                     state.outFrames++
                     state.sentBytes += chunk.size
                     offset += size
@@ -632,6 +695,7 @@ internal class Lte4Shim(
     }
 
     private fun deliverToCore(bytes: ByteArray, output: OutputStream, state: ConnState) {
+        state.lastActivityAt = System.currentTimeMillis()
         if (!Lte4Wire.inboundIsFramed(mode)) {
             if (bytes.isEmpty()) return
             state.inFrames++
