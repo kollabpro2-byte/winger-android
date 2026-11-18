@@ -14,6 +14,12 @@ import kotlin.concurrent.thread
 data class TunnelOptions(
     val dnsServer: String? = null,
     val directDomains: List<String> = emptyList(),
+    /**
+     * Насколько глубоко брать маршрутизацию и DNS из подписки:
+     * [RoutingPlan.OFF] — только наши настройки, [RoutingPlan.RULES] — правила,
+     * [RoutingPlan.RULES_AND_DNS] — правила и DNS-серверы.
+     */
+    val subRouting: Int = RoutingPlan.OFF,
     val useMux: Boolean = false,
     val mtu: Int = 1500,
     val coreLogFile: String? = null,
@@ -61,12 +67,18 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     )
     val sb = JSONObject()
     sb.put("log", coreLog(opts.coreLogFile))
-    sb.put("dns", dnsSection(opts.dnsServer))
+    // Правила и DNS из подписки — если пользователь их включил и они там есть.
+    val plan = if (opts.subRouting != RoutingPlan.OFF) RoutingPlan.build(xray) else null
+    if (plan != null && plan.skipped.isNotEmpty()) {
+        VpnLog.add("роутинг подписки: не перенесено ${plan.skipped.size} (${plan.skipped.take(6).joinToString(", ")})")
+    }
+    val subDns = if (opts.subRouting == RoutingPlan.RULES_AND_DNS) plan?.dns else null
+    sb.put("dns", subDns ?: dnsSection(opts.dnsServer))
     sb.put("inbounds", JSONArray().put(tunInbound(opts.mtu)))
     sb.put("outbounds", JSONArray()
         .put(JSONObject().put("type", "direct").put("tag", "direct"))
         .put(proxyOutbound))
-    sb.put("route", routeSection(opts.directDomains, proxyOutbound.optString("server")))
+    sb.put("route", routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules))
     return sb.toString()
 }
 
@@ -76,10 +88,14 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
  * only emitted when the proxy endpoint is still a name: an IP literal must not
  * carry extra fields a future core could reject.
  */
-private fun routeSection(directDomains: List<String>, proxyServer: String): JSONObject {
+private fun routeSection(
+    directDomains: List<String>,
+    proxyServer: String,
+    subRules: JSONArray? = null,
+): JSONObject {
     val route = JSONObject()
         .put("auto_detect_interface", true)
-        .put("rules", routeRules(directDomains))
+        .put("rules", routeRules(directDomains, subRules))
     if (!isIpLiteral(proxyServer)) route.put("default_domain_resolver", "bootstrap")
     return route
 }
@@ -155,7 +171,7 @@ private fun firstVless(obs: JSONArray): JSONObject? {
  * Bypass entries come from the UI as bare hosts, but older versions stored
  * "domain:bank.ru" and users may paste URLs. Normalise both.
  */
-internal fun routeRules(raw: List<String>): JSONArray {
+internal fun routeRules(raw: List<String>, subRules: JSONArray? = null): JSONArray {
     val hosts = raw.mapNotNull { line ->
         val host = line.trim().lowercase()
             .removePrefix("domain:")
@@ -167,6 +183,7 @@ internal fun routeRules(raw: List<String>): JSONArray {
         host.takeIf { it.isNotBlank() && it != "domain" }
     }.distinct()
     val rules = JSONArray()
+    // Список пользователя — первым: он явный, и его выбор важнее подписки.
     if (hosts.isNotEmpty()) {
         rules.put(JSONObject()
             .put("domain_suffix", JSONArray(hosts))
@@ -174,7 +191,17 @@ internal fun routeRules(raw: List<String>): JSONArray {
             .put("outbound", "direct"))
     }
     rules.put(JSONObject().put("action", "sniff"))
+    // Перехват DNS нужен один раз и до правил маршрутизации.
     rules.put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
+    // Правила из подписки — в том же порядке, как в Xray. Готовый перехват DNS
+    // из них пропускаем: выше уже есть.
+    if (subRules != null) {
+        for (i in 0 until subRules.length()) {
+            val rule = subRules.optJSONObject(i) ?: continue
+            if (rule.optString("action") == "hijack-dns") continue
+            rules.put(rule)
+        }
+    }
     rules.put(JSONObject().put("action", "route").put("outbound", "proxy"))
     return rules
 }

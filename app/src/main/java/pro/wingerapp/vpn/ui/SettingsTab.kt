@@ -195,6 +195,17 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
                     }
                 }
             }
+            var subRoute by remember { mutableStateOf(Store.subRouting(ctx)) }
+            SwitchRow(
+                s[R.string.set_subroute],
+                s[R.string.set_subroute_hint],
+                subRoute,
+                divider = true,
+            ) {
+                subRoute = it
+                Store.subRouting(ctx, it)
+                onApply()
+            }
             var verbose by remember { mutableStateOf(BuildConfig.CORE_LOG || Store.coreLog(ctx)) }
             SwitchRow(s[R.string.set_core_log], s[R.string.set_core_log_hint], verbose, divider = true) {
                 verbose = it

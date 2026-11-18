@@ -76,6 +76,8 @@
     <string name="set_lte4_auto">Auto</string>
     <string name="set_lte4_streams">Downstream streams (f=1cN)</string>
     <string name="set_lte4_streams_hint">Frames only. 32 is the relay\'s best result, 16 if the phone is low on memory, 1 for strict order</string>
+    <string name="set_subroute">Routing and DNS from subscription</string>
+    <string name="set_subroute_hint">Rules from the subscription: direct sites, ad blocking, custom DNS. Disables itself if the core rejects them</string>
     <string name="set_lte4_off">Off</string>
     <string name="set_lte4_flush">Flush</string>
     <string name="set_lte4_framed">Frames</string>

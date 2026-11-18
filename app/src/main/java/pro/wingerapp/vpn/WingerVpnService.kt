@@ -226,6 +226,9 @@ class WingerVpnService : VpnService() {
         // сохраняет остальные настройки XHTTP (иначе теряется фикс 413).
         val dropped = mutableSetOf<String>()
         var useMinimal = false
+        // Роутинг подписки: при отказе ядра отступаем по шагам — сначала без DNS,
+        // потом совсем без него. Туннель важнее правил.
+        var subRouting = if (Store.subRouting(this)) RoutingPlan.RULES_AND_DNS else RoutingPlan.OFF
         while (true) {
             val sbConfig = try {
                 toSingBox(
@@ -240,6 +243,7 @@ class WingerVpnService : VpnService() {
                         dropXhttpFields = dropped,
                         ipv6Proxy = Store.ipv6Proxy(this),
                         shimPort = shimPort,
+                        subRouting = subRouting,
                     ),
                 )
             } catch (e: Throwable) {
@@ -279,12 +283,24 @@ class WingerVpnService : VpnService() {
                 runCatching { server.close() }
                 singServer = null
                 val message = e.message.orEmpty()
-                if (retryableConfigError(message) && attempt < 5) {
+                if (retryableConfigError(message) && attempt < 8) {
                     // Имя поля из текста ошибки: "outbounds[1].transport.<field>".
                     val badField = Regex("""transport\.([A-Za-z0-9_]+)""")
                         .find(message)?.groupValues?.get(1)
                     if (badField != null && dropped.add(badField)) {
                         VpnLog.add("ядро отвергло поле $badField — повтор без него")
+                        attempt++
+                        continue
+                    }
+                    if (subRouting != RoutingPlan.OFF) {
+                        // Ядро не приняло dns/route из подписки: сначала остаются
+                        // только правила, потом наши обычные настройки.
+                        subRouting = if (subRouting == RoutingPlan.RULES_AND_DNS) {
+                            RoutingPlan.RULES
+                        } else {
+                            RoutingPlan.OFF
+                        }
+                        VpnLog.add("роутинг подписки отвергнут — повтор в режиме $subRouting")
                         attempt++
                         continue
                     }

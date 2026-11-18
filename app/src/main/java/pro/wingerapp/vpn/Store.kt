@@ -256,6 +256,15 @@ object Store {
     fun lte4Streams(ctx: Context, n: Int) = write(ctx) { putInt("lte4Streams", n.coerceIn(1, 32)) }
 
     /**
+     * Брать правила маршрутизации и DNS из подписки. По умолчанию включено:
+     * в подписках Remnawave лежит готовый роутинг (RU-сайты напрямую, реклама в
+     * блок), и без него эти настройки просто терялись.
+     */
+    fun subRouting(ctx: Context) = prefs(ctx)?.getBoolean("subRouting", true) ?: true
+
+    fun subRouting(ctx: Context, on: Boolean) = write(ctx) { putBoolean("subRouting", on) }
+
+    /**
      * Один раз после обновления переводим «кадры» в «авто»: на живом трафике
      * кадры оказались медленнее обычного режима, и оставлять их выбранными
      * нечестно. Явный выбор после этой миграции сохраняется.
