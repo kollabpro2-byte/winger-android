@@ -54,6 +54,13 @@ internal class Lte4Shim(
     private val live = AtomicInteger(0)
 
     /**
+     * Активные сессии режима «авто». Один общий поток обходит их и выталкивает
+     * хвост по паузе — так на десятки соединений приходится один таймер, а не
+     * по потоку на каждое (иначе сотни пробуждений в секунду и батарея).
+     */
+    private val autoSessions = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    /**
      * Сокеты исходящего WSS обязательно защищаем: приложение исключено из
      * туннеля, но protect() — страховка от петли, если политики изменятся.
      */
@@ -93,6 +100,7 @@ internal class Lte4Shim(
             }
         }
         VpnLog.add("LTE4 shim слушает 127.0.0.1:$port, режим ${Lte4.modeName(mode)}")
+        if (mode == Lte4.MODE_AUTO) startAutoScheduler()
         return port
     }
 
@@ -101,6 +109,26 @@ internal class Lte4Shim(
         runCatching { server?.close() }
         server = null
         port = 0
+        autoSessions.clear()
+    }
+
+    /**
+     * Один таймер на все «авто»-сессии. Тик 10 мс даёт задержку выталкивания
+     * 25–35 мс, а когда сессий нет — спит 120 мс, чтобы не будить процесс зря.
+     */
+    private fun startAutoScheduler() {
+        thread(isDaemon = true, name = "lte4-auto") {
+            while (running) {
+                val busy = autoSessions.isNotEmpty()
+                try {
+                    Thread.sleep(if (busy) 10 else 120)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!running) break
+                for (flush in autoSessions) runCatching { flush() }
+            }
+        }
     }
 
     private fun serve(local: Socket) {
@@ -282,6 +310,9 @@ internal class Lte4Shim(
 
         /** Потолок одновременных соединений через прослойку. */
         const val MAX_LIVE = 96
+
+        /** Пустое WS-сообщение: им выталкиваем хвост пачки из шлюза. */
+        val EMPTY = ByteArray(0)
     }
 
     /**
@@ -338,6 +369,36 @@ internal class Lte4Shim(
         }
         VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}")
 
+        // «Авто»: копим байты и выталкиваем хвост только когда пачка закрылась —
+        // по размеру (32 КБ) или по паузе (25 мс). Порядок держит upLock: и поток
+        // чтения, и планировщик отправляют из-под него, иначе сообщения могут
+        // обогнать друг друга и поток VLESS развалится.
+        val upLock = Any()
+        val autoUp = if (mode == Lte4.MODE_AUTO) AutoUplink() else null
+        fun sendBatchLocked(parts: List<ByteArray>) {
+            var ok = true
+            for (p in parts) {
+                if (!ws.send(p.toByteString())) {
+                    ok = false
+                    break
+                }
+            }
+            // Пустое сообщение выталкивает хвост пачки из шлюза.
+            if (ok && !ws.send(EMPTY.toByteString())) ok = false
+            if (!ok) state.open = false
+        }
+        val flusher: (() -> Unit)? = autoUp?.let { up ->
+            {
+                synchronized(upLock) {
+                    if (state.open) {
+                        val parts = up.flushIfIdle(System.currentTimeMillis())
+                        if (parts.isNotEmpty()) sendBatchLocked(parts)
+                    }
+                }
+            }
+        }
+        if (flusher != null) autoSessions += flusher
+
         // PING (или пустое сообщение) выталкивает застрявшее в шлюзе: 300 мс первые
         // 3 с после последних данных, дальше раз в 5 с — чтобы не закрылось по простою.
         if (Lte4Wire.keepAlive(mode, 0) != null) {
@@ -359,17 +420,26 @@ internal class Lte4Shim(
                 while (offset < message.size) {
                     val size = minOf(Lte4.MAX_CHUNK, message.size - offset)
                     val chunk = message.copyOfRange(offset, offset + size)
-                    val seq = if (Lte4Wire.inboundIsFramed(mode)) state.seq.getAndIncrement() else 0L
-                    // send() == false значит соединение уже закрывается: добивать
-                    // остаток сообщения бессмысленно, выходим из чтения целиком.
-                    var ok = true
-                    for (part in Lte4Wire.outbound(mode, seq, chunk)) {
-                        if (!ws.send(part.toByteString())) {
-                            ok = false
-                            break
+                    if (autoUp != null) {
+                        // Склейка: отправляем, только когда пачка набралась.
+                        synchronized(upLock) {
+                            val parts = autoUp.offer(chunk, System.currentTimeMillis())
+                            if (parts.isNotEmpty()) sendBatchLocked(parts)
                         }
+                        if (!state.open) break@read
+                    } else {
+                        val seq = if (Lte4Wire.inboundIsFramed(mode)) state.seq.getAndIncrement() else 0L
+                        // send() == false значит соединение уже закрывается: добивать
+                        // остаток сообщения бессмысленно, выходим из чтения целиком.
+                        var ok = true
+                        for (part in Lte4Wire.outbound(mode, seq, chunk)) {
+                            if (!ws.send(part.toByteString())) {
+                                ok = false
+                                break
+                            }
+                        }
+                        if (!ok) break@read
                     }
-                    if (!ok) break@read
                     state.lastDataAt = System.currentTimeMillis()
                     state.outFrames++
                     state.sentBytes += chunk.size
@@ -379,11 +449,21 @@ internal class Lte4Shim(
         } catch (_: Throwable) {
             // Обрыв любой стороны — закрываем обе.
         } finally {
+            if (flusher != null) autoSessions -= flusher
+            // Хвост, который ещё лежит в склейке, надо отдать: иначе последний
+            // кусок запроса не дойдёт и страница/файл повиснут.
+            if (autoUp != null && state.open) {
+                synchronized(upLock) {
+                    val rest = autoUp.drainNow()
+                    if (rest.isNotEmpty()) sendBatchLocked(rest)
+                }
+            }
             state.open = false
             runCatching { ws.close(1000, "bye") }
+            val batched = autoUp?.let { ", пачек ${it.batches}/по паузе ${it.idleFlushes}" } ?: ""
             VpnLog.add(
                 "LTE4 shim: закрыто (${Lte4.modeName(mode)}), ↑${state.outFrames}/${state.sentBytes} б " +
-                    "↓${state.inFrames}/${state.recvBytes} б"
+                    "↓${state.inFrames}/${state.recvBytes} б$batched"
             )
         }
     }

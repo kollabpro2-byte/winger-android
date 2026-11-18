@@ -73,10 +73,17 @@ internal object Lte4 {
      */
     const val MODE_FRAMED: Int = 2
 
+    /**
+     * Склейка крупными сообщениями плюс выталкивание хвоста по паузе.
+     * Байты не меняются, лишнее сообщение — одно на пачку, а не на каждый кусок.
+     */
+    const val MODE_AUTO: Int = 3
+
     fun modeName(mode: Int): String = when (mode) {
         MODE_OFF -> "выкл"
         MODE_FLUSH -> "флаш"
         MODE_FRAMED -> "кадры"
+        MODE_AUTO -> "авто"
         else -> "?"
     }
 }
@@ -107,6 +114,85 @@ internal object Lte4Wire {
     fun inboundIsFramed(mode: Int): Boolean = mode == Lte4.MODE_FRAMED
 
     private val EMPTY = ByteArray(0)
+}
+
+/**
+ * Склейка исходящего потока и «выталкивание» хвоста.
+ *
+ * Зачем: шлюз держит последнее сообщение пачки, пока не придёт следующее. Из-за
+ * этого не открываются страницы (короткий запрос висит) и не завершается
+ * отправка файла (виснет финальный кусок). Лечится пустым сообщением после
+ * пачки, но слать его после *каждого* куска — вдвое больше сообщений и вдвое
+ * медленнее.
+ *
+ * Здесь наоборот: байты копятся и уходят одним сообщением до [maxBatch], а
+ * пустой «толкач» идёт только когда пачка закрылась — по размеру или по тишине
+ * [idleMs]. Скачивание не платит ничего, отправка не встаёт.
+ *
+ * Порядок байт сохраняется: [drain] всегда забирает всё, что накопилось к
+ * моменту вызова, и вызывающий отправляет это под тем же локом.
+ */
+internal class AutoUplink(
+    private val maxBatch: Int = 32 * 1024,
+    private val idleMs: Long = 25,
+) {
+    private val buf = java.io.ByteArrayOutputStream()
+
+    /** Когда последний раз приходили байты от ядра. */
+    private var lastIn: Long = 0
+
+    /** Сколько пачек отправлено (для лога). */
+    var batches: Long = 0L
+        private set
+
+    /** Сколько раз пачку закрыла тишина, а не размер (видно, работает ли порог). */
+    var idleFlushes: Long = 0L
+        private set
+
+    /** Добавить байты. Непустой список — пачка набралась, отправляйте сразу. */
+    @Synchronized
+    fun offer(bytes: ByteArray, nowMs: Long): List<ByteArray> {
+        lastIn = nowMs
+        buf.write(bytes)
+        if (buf.size() < maxBatch) return emptyList()
+        batches++
+        return drain()
+    }
+
+    /** Отдать накопленное, если тишина дольше порога. Пусто — значит рано. */
+    @Synchronized
+    fun flushIfIdle(nowMs: Long): List<ByteArray> {
+        if (buf.size() == 0) return emptyList()
+        if (nowMs - lastIn < idleMs) return emptyList()
+        batches++
+        idleFlushes++
+        return drain()
+    }
+
+    /** Отдать всё немедленно — при закрытии соединения. */
+    @Synchronized
+    fun drainNow(): List<ByteArray> {
+        if (buf.size() == 0) return emptyList()
+        batches++
+        return drain()
+    }
+
+    /** Сколько байт ждёт отправки (для диагностики). */
+    @Synchronized
+    fun pending(): Int = buf.size()
+
+    private fun drain(): List<ByteArray> {
+        val all = buf.toByteArray()
+        buf.reset()
+        val out = ArrayList<ByteArray>(2)
+        var off = 0
+        while (off < all.size) {
+            val n = minOf(maxBatch, all.size - off)
+            out += all.copyOfRange(off, off + n)
+            off += n
+        }
+        return out
+    }
 }
 
 /**

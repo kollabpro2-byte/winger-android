@@ -163,9 +163,10 @@ internal fun SettingsTab(ctx: Context, onApply: () -> Unit) {
             )
             Row(Modifier.padding(top = 8.dp)) {
                 listOf(
-                    Lte4.MODE_OFF to s[R.string.set_lte4_off],
+                    Lte4.MODE_AUTO to s[R.string.set_lte4_auto],
                     Lte4.MODE_FLUSH to s[R.string.set_lte4_flush],
                     Lte4.MODE_FRAMED to s[R.string.set_lte4_framed],
+                    Lte4.MODE_OFF to s[R.string.set_lte4_off],
                 ).forEach { (mode, label) ->
                     Seg(label, lte4 == mode, Modifier.weight(1f)) {
                         lte4 = mode

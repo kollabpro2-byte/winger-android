@@ -128,6 +128,40 @@ class Lte4FramesTest {
         assertEquals(Lte4.TYPE_PING, Lte4.decode(Lte4Wire.keepAlive(Lte4.MODE_FRAMED, 4)!!)?.type)
     }
 
+    @Test
+    fun autoUplinkBatchesBySizeAndPushesOnIdle() {
+        val up = AutoUplink(maxBatch = 8, idleMs = 25)
+        // Мелкий кусок копится: отправлять пока нечего.
+        assertTrue(up.offer(byteArrayOf(1, 2, 3), nowMs = 1_000).isEmpty())
+        // Тишины ещё нет — выталкивать рано.
+        assertTrue(up.flushIfIdle(nowMs = 1_010).isEmpty())
+        // Пауза прошла — отдаём ровно то, что накопили.
+        val idle = up.flushIfIdle(nowMs = 1_030)
+        assertEquals(1, idle.size)
+        assertArrayEquals(byteArrayOf(1, 2, 3), idle[0])
+        assertEquals(1L, up.idleFlushes)
+        assertEquals(0, up.pending())
+    }
+
+    @Test
+    fun autoUplinkSplitsByBatchSizeAndKeepsOrder() {
+        val up = AutoUplink(maxBatch = 4, idleMs = 25)
+        // 10 байт при пачке 4 → 4 + 4 + 2, порядок байт сохраняется.
+        val out = up.offer(ByteArray(10) { it.toByte() }, nowMs = 1_000)
+        assertEquals(listOf(4, 4, 2), out.map { it.size })
+        assertEquals((0..9).map { it.toByte() }, out.flatMap { it.toList() })
+        assertEquals(0, up.pending())
+    }
+
+    @Test
+    fun autoUplinkDrainsRemainderOnClose() {
+        val up = AutoUplink(maxBatch = 64, idleMs = 1_000)
+        assertTrue(up.offer("tail".toByteArray(), nowMs = 5).isEmpty())
+        val rest = up.drainNow()
+        assertEquals(1, rest.size)
+        assertEquals("tail", String(rest[0]))
+    }
+
     /**
      * Регрессия: буфер порядка раньше был один на всю прослойку. Вторая сессия
      * тоже начинает с seq 0, и все её кадры отбрасывались как «уже отданные».
