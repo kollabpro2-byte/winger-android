@@ -201,6 +201,7 @@ class WingerVpnService : VpnService() {
         // Прослойку поднимаем ДО старта ядра: первое же подключение к
         // 127.0.0.1:port иначе упадёт с «connection refused». В режиме «выкл»
         // её нет вовсе — ядро идёт в шлюз напрямую, как Xray.
+        Store.migrateLte4Mode(this)
         val lte4Mode = Store.lte4Mode(this)
         val shimPort = if (lte4Mode == Lte4.MODE_OFF) {
             0

@@ -314,6 +314,19 @@ internal class Lte4Shim(
 
         /** Пустое WS-сообщение: им выталкиваем хвост пачки из шлюза. */
         val EMPTY = ByteArray(0)
+
+        /**
+         * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
+         * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
+         * становились медленнее обычного режима. С паузой ≥5 мс склейки нет.
+         */
+        const val FRAME_GAP_MS = 6L
+
+        /**
+         * Payload одного кадра: 24 КБ — оптимум релея (4–7 МБ/с), и вместе с
+         * 6-байтным заголовком не вылезаем за лимит шлюза в 32 КБ на кадр.
+         */
+        const val FRAME_PAYLOAD = 24 * 1024
     }
 
     /**
@@ -323,6 +336,7 @@ internal class Lte4Shim(
      * «выкл» поток байт не меняется, в «кадрах» добавляется заголовок и порядок.
      */
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
+        val startedAt = System.currentTimeMillis()
         // Кадровый режим на релее включается параметром в path: /ws?f=1.
         val path = if (mode == Lte4.MODE_FRAMED) Lte4.framedPath(hs.path) else hs.path
         val url = "wss://" + hs.host + path
@@ -372,24 +386,33 @@ internal class Lte4Shim(
         }
         VpnLog.add("LTE4 shim: WSS открыт, режим ${Lte4.modeName(mode)}")
 
-        // Батч-режимы: «авто» (сырые байты) и «кадры». Оба копят данные в пачки
-        // до 32 КБ и выталкивают хвост по расписанию релея: первый толкач через
-        // 15 мс тишины, повторы через 50/150/400 мс (в 10 % случаев залипает и сам
-        // толкач). Порядок держит upLock: и поток чтения, и таймер отправляют
-        // из-под него, иначе сообщения обгонят друг друга и поток развалится.
+        // Батч-режимы: «авто» (сырые байты) и «кадры». Данные копятся в пачки, но
+        // шлюзу они уходят с паузами: по замерам релея, если слать сообщения
+        // вплотную, шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с.
+        // Именно это и делало кадры медленными — теперь кадры идут по одному,
+        // не чаще раза в FRAME_GAP_MS.
         val batched = mode == Lte4.MODE_AUTO || mode == Lte4.MODE_FRAMED
         val framed = mode == Lte4.MODE_FRAMED
         val upLock = Any()
-        val autoUp = if (batched) AutoUplink(idleMs = 15) else null
+        val autoUp = if (batched) AutoUplink(maxBatch = FRAME_PAYLOAD, idleMs = 15) else null
         val pusher = if (batched) TailPusher() else null
+        val frameQueue = if (framed) java.util.ArrayDeque<ByteArray>() else null
+        var lastFrameAt = -1_000_000L
+
         fun pusherMessage(): ByteString =
             if (framed) Lte4.encode(Lte4.TYPE_PING, 0).toByteString() else EMPTY.toByteString()
-        fun sendBatchLocked(parts: List<ByteArray>) {
+
+        fun sendPayloadLocked(payload: ByteArray): Boolean =
+            ws.send(
+                (if (framed) Lte4.encode(Lte4.TYPE_DATA, state.seq.getAndIncrement(), payload)
+                else payload).toByteString()
+            )
+
+        /** «Авто»: пачка уходит сразу, задержка шлюза тут не копится. */
+        fun sendPartsNowLocked(parts: List<ByteArray>) {
             var ok = true
             for (p in parts) {
-                // В кадрах у каждого куска свой seq; seq нумерует только DATA.
-                val wire = if (framed) Lte4.encode(Lte4.TYPE_DATA, state.seq.getAndIncrement(), p) else p
-                if (!ws.send(wire.toByteString())) {
+                if (!sendPayloadLocked(p)) {
                     ok = false
                     break
                 }
@@ -397,6 +420,31 @@ internal class Lte4Shim(
             if (ok) ok = ws.send(pusherMessage())
             if (!ok) state.open = false else pusher?.onBatchSent(System.currentTimeMillis())
         }
+
+        /** «Кадры»: по одному кадру на тик, чтобы шлюз не склеивал пачку. */
+        fun pumpFramesLocked(now: Long): Boolean {
+            val q = frameQueue ?: return false
+            if (q.isEmpty()) return false
+            if (now - lastFrameAt < FRAME_GAP_MS) return true
+            if (!sendPayloadLocked(q.removeFirst())) {
+                state.open = false
+                return true
+            }
+            lastFrameAt = now
+            if (q.isEmpty()) pusher?.onBatchSent(now)
+            return true
+        }
+
+        fun deliverLocked(parts: List<ByteArray>) {
+            val q = frameQueue
+            if (q == null) {
+                sendPartsNowLocked(parts)
+            } else {
+                q.addAll(parts)
+                pumpFramesLocked(System.currentTimeMillis())
+            }
+        }
+
         val upForTick = autoUp
         val pushForTick = pusher
         val ticker: (() -> Unit)? = if (upForTick != null && pushForTick != null) {
@@ -404,12 +452,14 @@ internal class Lte4Shim(
                 synchronized(upLock) {
                     if (state.open) {
                         val now = System.currentTimeMillis()
-                        val parts = upForTick.flushIfIdle(now)
-                        if (parts.isNotEmpty()) {
-                            sendBatchLocked(parts)
-                        } else if (pushForTick.takeIfDue(now)) {
-                            // Хвост уже ушёл, но мог залипнуть в шлюзе — повторяем.
-                            if (!ws.send(pusherMessage())) state.open = false
+                        // Пока в очереди есть кадры, толкачи не нужны: хвост не ушёл.
+                        if (!pumpFramesLocked(now)) {
+                            val parts = upForTick.flushIfIdle(now)
+                            if (parts.isNotEmpty()) {
+                                deliverLocked(parts)
+                            } else if (pushForTick.takeIfDue(now)) {
+                                if (!ws.send(pusherMessage())) state.open = false
+                            }
                         }
                     }
                 }
@@ -444,7 +494,7 @@ internal class Lte4Shim(
                         synchronized(upLock) {
                             pusher.onData()
                             val parts = autoUp.offer(chunk, System.currentTimeMillis())
-                            if (parts.isNotEmpty()) sendBatchLocked(parts)
+                            if (parts.isNotEmpty()) deliverLocked(parts)
                         }
                         if (!state.open) break@read
                     } else {
@@ -470,29 +520,38 @@ internal class Lte4Shim(
             // Обрыв любой стороны — закрываем обе.
         } finally {
             if (ticker != null) tickers -= ticker
-            // Хвост, который ещё лежит в склейке, надо отдать: иначе последний
-            // кусок запроса не дойдёт и страница/файл повиснут. Даём шлюзу время
-            // его пропустить, прежде чем закрывать WS.
+            // Хвост, который ещё лежит в склейке или в очереди кадров, надо отдать:
+            // иначе последний кусок запроса не дойдёт и страница/файл повиснут.
             if (autoUp != null && pusher != null && state.open) {
                 val sentTail = synchronized(upLock) {
                     val rest = autoUp.drainNow()
-                    if (rest.isEmpty()) {
-                        false
-                    } else {
-                        sendBatchLocked(rest)
-                        true
+                    val q = frameQueue
+                    var any = rest.isNotEmpty()
+                    if (any) {
+                        if (q == null) sendPartsNowLocked(rest) else q.addAll(rest)
                     }
+                    if (q != null && q.isNotEmpty()) {
+                        // На закрытии паузы не нужны: отдаём остаток сразу.
+                        while (q.isNotEmpty()) {
+                            if (!sendPayloadLocked(q.removeFirst())) break
+                        }
+                        ws.send(pusherMessage())
+                        any = true
+                    }
+                    any
                 }
                 if (sentTail) runCatching { Thread.sleep(120) }
             }
             state.open = false
             runCatching { ws.close(1000, "bye") }
-            val batched = autoUp?.let {
+            val ms = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+            val rate = state.sentBytes * 1000 / ms / 1024
+            val batchedInfo = autoUp?.let {
                 ", пачек ${it.batches}/по паузе ${it.idleFlushes}, толкачей ${pusher?.sent ?: 0}"
             } ?: ""
             VpnLog.add(
-                "LTE4 shim: закрыто (${Lte4.modeName(mode)}), ↑${state.outFrames}/${state.sentBytes} б " +
-                    "↓${state.inFrames}/${state.recvBytes} б$batched"
+                "LTE4 shim: закрыто (${Lte4.modeName(mode)}) за $ms мс, ↑${state.outFrames}/" +
+                    "${state.sentBytes} б (${rate} КБ/с) ↓${state.inFrames}/${state.recvBytes} б$batchedInfo"
             )
         }
     }

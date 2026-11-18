@@ -246,6 +246,20 @@ object Store {
 
     fun lte4Mode(ctx: Context, mode: Int) = write(ctx) { putInt("lte4Mode", mode.coerceIn(0, 3)) }
 
+    /**
+     * Один раз после обновления переводим «кадры» в «авто»: на живом трафике
+     * кадры оказались медленнее обычного режима, и оставлять их выбранными
+     * нечестно. Явный выбор после этой миграции сохраняется.
+     */
+    fun migrateLte4Mode(ctx: Context) {
+        val p = prefs(ctx) ?: return
+        if (p.getBoolean("lte4Migrated", false)) return
+        if (p.getInt("lte4Mode", Lte4.MODE_AUTO) == Lte4.MODE_FRAMED) {
+            lte4Mode(ctx, Lte4.MODE_AUTO)
+        }
+        write(ctx) { putBoolean("lte4Migrated", true) }
+    }
+
     fun coreLog(ctx: Context) = prefs(ctx)?.getBoolean("coreLog", false) ?: false
 
     fun coreLog(ctx: Context, on: Boolean) = write(ctx) { putBoolean("coreLog", on) }
