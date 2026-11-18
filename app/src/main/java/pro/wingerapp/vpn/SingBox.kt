@@ -239,8 +239,16 @@ private fun convertVless(xray: JSONObject, useMux: Boolean, minimalTransport: Bo
     val flowUsable = flow.isNotBlank() && network in setOf("tcp", "raw", "")
     if (flowUsable) sb.put("flow", flow)
     users.optString("packetEncoding").takeIf { it.isNotBlank() }?.let { sb.put("packet_encoding", it) }
-    transportFor(stream, network, minimalTransport, dropXhttpFields)?.let { sb.put("transport", it) }
-    tlsFor(stream, vnext.optString("address"))?.let { sb.put("tls", it) }
+    // Xray по умолчанию гоняет UDP как xudp; если в подписке поле не указано,
+    // без него sing-box не умеет UDP через прокси (DNS внутри туннеля, звонки).
+    if (sb.optString("packet_encoding").isBlank()) sb.put("packet_encoding", "xudp")
+    val address = vnext.optString("address")
+    // For WebSocket the Host header must be the domain (SNI), not the resolved IP:
+    // gateways route by Host, and our `server` field is already an IP.
+    val hostForWs = stream.optJSONObject("tlsSettings")?.optString("serverName").orEmpty()
+        .ifBlank { address }
+    transportFor(stream, network, minimalTransport, dropXhttpFields, hostForWs)?.let { sb.put("transport", it) }
+    tlsFor(stream, address, network)?.let { sb.put("tls", it) }
     if (useMux && !flowUsable) {
         sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", "smux"))
     }
@@ -275,6 +283,16 @@ private fun resolveServer(host: String, allowIpv6: Boolean = false): String {
         runCatching { answer.offer(pick ?: raw, LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }
     }
     val picked = runCatching { answer.poll(LOOKUP_TIMEOUT_SEC, TimeUnit.SECONDS) }.getOrNull()
+    // Этот резолв идёт из процесса приложения, а он исключён из туннеля
+    // (addDisallowedApplication), то есть DNS уходит мимо VPN — соединение к
+    // серверу не зацикливается само на себя. В лог пишем без адреса.
+    VpnLog.add(
+        "прокси $raw: " + when {
+            picked == null || picked == raw -> "A-записи нет, имя отдано ядру"
+            picked.contains(':') -> "взят IPv6-адрес"
+            else -> "взят IPv4-адрес (резолв вне туннеля)"
+        }
+    )
     return picked?.takeIf { it.isNotBlank() } ?: raw
 }
 
@@ -304,7 +322,7 @@ internal fun plausibleAddress(value: String): Boolean {
 private const val LOOKUP_TIMEOUT_SEC = 3L
 private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 
-private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
+private fun tlsFor(stream: JSONObject, address: String, network: String = ""): JSONObject? {
     return when (stream.optString("security", "").lowercase()) {
         "reality" -> {
             val reality = stream.optJSONObject("realitySettings") ?: JSONObject()
@@ -313,7 +331,7 @@ private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
                 .put("server_name", reality.optString("serverName"))
                 .put("utls", JSONObject()
                     .put("enabled", true)
-                    .put("fingerprint", reality.optString("fingerprint", "chrome")))
+                    .put("fingerprint", reality.optString("fingerprint").ifBlank { "chrome" }))
                 .put("reality", JSONObject()
                     .put("enabled", true)
                     .put("public_key", reality.optString("publicKey"))
@@ -326,9 +344,19 @@ private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
                 .put("server_name", tlsSettings.optString("serverName").ifBlank { address })
                 .put("utls", JSONObject()
                     .put("enabled", true)
-                    .put("fingerprint", tlsSettings.optString("fingerprint", "chrome")))
+                    .put("fingerprint", tlsSettings.optString("fingerprint").ifBlank { "chrome" }))
             val alpn = tlsSettings.optJSONArray("alpn")
-            if (alpn != null && alpn.length() > 0) tls.put("alpn", alpn)
+            when {
+                // ALPN из подписки уважаем всегда: если там h2 — значит так и надо.
+                alpn != null && alpn.length() > 0 -> tls.put("alpn", alpn)
+                // WebSocket и httpupgrade апгрейдятся ТОЛЬКО по HTTP/1.1. Если в
+                // ссылке ALPN не указан, sing-box по умолчанию предложит h2, и
+                // Yandex API Gateway (как и любой nginx с h2) откажет в upgrade:
+                // сервер выглядит «мёртвым», хотя TLS проходит. Поэтому для ws
+                // подставляем http/1.1 сами.
+                network in setOf("ws", "httpupgrade", "http", "h2") ->
+                    tls.put("alpn", JSONArray().put("http/1.1"))
+            }
             tls
         }
         else -> null
@@ -336,15 +364,23 @@ private fun tlsFor(stream: JSONObject, address: String): JSONObject? {
 }
 
 /** Xray network names → sing-box transports. Anything unknown is left out. */
-private fun transportFor(stream: JSONObject, network: String, minimal: Boolean = false, drop: Set<String> = emptySet()): JSONObject? = when (network) {
+private fun transportFor(
+    stream: JSONObject,
+    network: String,
+    minimal: Boolean = false,
+    drop: Set<String> = emptySet(),
+    hostFallback: String = "",
+): JSONObject? = when (network) {
     "xhttp", "splithttp" -> xhttpTransport(stream, minimal, drop)
     "ws" -> {
         val ws = stream.optJSONObject("wsSettings") ?: JSONObject()
         val t = JSONObject().put("type", "ws")
         ws.optString("path").takeIf { it.isNotBlank() }?.let { t.put("path", it) }
-        ws.optJSONObject("headers")?.optString("Host")?.takeIf { it.isNotBlank() }?.let { host ->
-            t.put("headers", JSONObject().put("Host", host))
-        }
+        // Host обязателен: без него sing-box подставит адрес сервера, а он у нас
+        // уже заменён на IP (resolveServer), и шлюз ответит 403 на upgrade.
+        val host = ws.optJSONObject("headers")?.optString("Host")?.takeIf { it.isNotBlank() }
+            ?: hostFallback.takeIf { it.isNotBlank() }
+        host?.let { t.put("headers", JSONObject().put("Host", it)) }
         if (!minimal) {
             ws.optInt("maxEarlyData", 0).takeIf { it > 0 }?.let { t.put("max_early_data", it) }
             ws.optString("earlyDataHeaderName").takeIf { it.isNotBlank() }

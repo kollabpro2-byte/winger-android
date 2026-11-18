@@ -145,6 +145,55 @@ class TunnelConfigTest {
     }
 
     @Test
+    fun wsWithoutAlpnGetsHttp11AndHostFromSni() {
+        // Реальный кейс LTE 4: Yandex API Gateway, VLESS + WS + TLS, в ссылке нет
+        // ни ALPN, ни headers.Host. Без ALPN= http/1.1 шлюз не делает upgrade,
+        // без Host (домена) — отвечает 403, и сервер «не работает».
+        val ws = """{"path":"/ws"}"""
+        val tls = """{"serverName":"gw.apigw.yandexcloud.net"}"""
+        val proxy = proxy(pipe(node(network = "ws", security = "tls", ws = ws, tls = tls)))
+
+        val transport = proxy.getJSONObject("transport")
+        assertEquals("ws", transport.getString("type"))
+        assertEquals("/ws", transport.getString("path"))
+        assertEquals("gw.apigw.yandexcloud.net", transport.getJSONObject("headers").getString("Host"))
+        assertFalse(transport.has("max_early_data"))
+        assertFalse(transport.has("early_data_header_name"))
+
+        val tlsOut = proxy.getJSONObject("tls")
+        assertEquals(true, tlsOut.getBoolean("enabled"))
+        assertEquals("gw.apigw.yandexcloud.net", tlsOut.getString("server_name"))
+        assertEquals(1, tlsOut.getJSONArray("alpn").length())
+        assertEquals("http/1.1", tlsOut.getJSONArray("alpn").getString(0))
+        assertEquals(true, tlsOut.getJSONObject("utls").getBoolean("enabled"))
+        assertEquals("chrome", tlsOut.getJSONObject("utls").getString("fingerprint"))
+
+        assertNull(proxy.opt("flow"))
+        assertEquals("xudp", proxy.getString("packet_encoding"))
+    }
+
+    @Test
+    fun wsKeepsExplicitAlpnFromSubscription() {
+        val ws = """{"path":"/ws"}"""
+        val tls = """{"serverName":"gw.example.com","alpn":["h2","http/1.1"]}"""
+        val tlsOut = proxy(pipe(node(network = "ws", security = "tls", ws = ws, tls = tls))).getJSONObject("tls")
+        assertEquals(2, tlsOut.getJSONArray("alpn").length())
+        assertEquals("h2", tlsOut.getJSONArray("alpn").getString(0))
+    }
+
+    @Test
+    fun explicitPacketEncodingWins() {
+        val json = """
+            {"remarks":"ws","outbounds":[{"protocol":"vless",
+              "settings":{"vnext":[{"address":"1.2.3.4","port":443,
+                "users":[{"id":"uuid-1","flow":"","packetEncoding":"packetaddr"}]}]},
+              "streamSettings":{"network":"ws","security":"tls",
+                "wsSettings":{"path":"/ws"},"tlsSettings":{"serverName":"gw.example.com"}}}]}
+        """.trimIndent()
+        assertEquals("packetaddr", proxy(pipe(json)).getString("packet_encoding"))
+    }
+
+    @Test
     fun xhttpKeepsTheUploadContractAndDropsOnlyUnknownFields() {
         val extra = """
             {"uplinkHTTPMethod":"GET","uplinkDataPlacement":"header","uplinkDataKey":"X-Am-Sync",
