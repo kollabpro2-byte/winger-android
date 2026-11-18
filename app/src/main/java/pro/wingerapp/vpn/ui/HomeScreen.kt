@@ -83,6 +83,8 @@ fun HomeScreen(
                 if (System.currentTimeMillis() - lastTunnelAt.get() < 6000L) return
                 // Экран погашен — не будим сеть замерами: результат никто не видит.
                 if (!AppVisibility.visible) return
+                // Другая сеть — другие адреса: кэш резолва прошлой сети не годится.
+                clearPingCaches()
                 vm.refresh(ping = true)
             }
         }

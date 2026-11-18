@@ -87,6 +87,62 @@ fun xrayConfigFor(raw: String, server: String): String {
 
 data class Endpoint(val host: String, val port: Int)
 
+/**
+ * Куда реально идёт трафик после всех цепочек.
+ *
+ * В CDN-схеме первый outbound смотрит на промежуточный сервер через
+ * `proxySettings`/`dialerProxy`, а конечный сервер стоит в конце цепочки. Пинг до
+ * первого хопа даёт красивое маленькое число, но врёт про сервер, поэтому берём
+ * последний адрес цепочки. Если цепочки нет — это и есть единственный сервер.
+ */
+fun terminalEndpoints(raw: String, server: String): List<Endpoint> {
+    val cfg = runCatching { namedConfig(raw, server) }.getOrNull() ?: return emptyList()
+    val outbounds = cfg.optJSONArray("outbounds") ?: return emptyList()
+    val byTag = HashMap<String, JSONObject>()
+    for (i in 0 until outbounds.length()) {
+        val o = outbounds.optJSONObject(i) ?: continue
+        val tag = o.optString("tag")
+        if (tag.isNotBlank()) byTag[tag] = o
+    }
+
+    var current: JSONObject? = null
+    for (i in 0 until outbounds.length()) {
+        val o = outbounds.optJSONObject(i) ?: continue
+        val proto = o.optString("protocol").lowercase()
+        if (proto in setOf("freedom", "blackhole", "dns", "loopback", "")) continue
+        current = o
+        break
+    }
+    if (current == null) return emptyList()
+
+    val seen = HashSet<String>()
+    repeat(8) {
+        val endpoints = endpointsOf(current!!)
+        val next = nextHopTag(current!!)
+        if (next == null || !seen.add(next)) return endpoints
+        current = byTag[next] ?: return endpoints
+    }
+    return emptyList()
+}
+
+/** Тег следующего хопа, если outbound ходит через другой outbound. */
+private fun nextHopTag(o: JSONObject): String? {
+    val candidates = listOfNotNull(
+        o.optJSONObject("proxySettings")?.optString("tag"),
+        o.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.optString("dialerProxy"),
+        o.optString("detour"),
+        o.optString("dialerProxy"),
+    )
+    return candidates.firstOrNull { it.isNotBlank() }
+}
+
+private fun endpointsOf(o: JSONObject): List<Endpoint> {
+    val found = mutableListOf<Endpoint>()
+    collectEndpoints(o, found)
+    if (found.isEmpty()) found += looseEndpoints(o)
+    return found.distinct()
+}
+
 fun tcpEndpoints(raw: String, server: String): List<Endpoint> {
     val cfg = namedConfig(raw, server)
     val obs = cfg.optJSONArray("outbounds") ?: return emptyList()
