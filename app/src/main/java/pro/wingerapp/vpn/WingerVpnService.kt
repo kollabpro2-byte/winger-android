@@ -79,6 +79,9 @@ class WingerVpnService : VpnService() {
         startInForeground()
         // A sticky restart arrives without extras: reuse the config that worked
         // last time instead of dying with "нет конфига".
+        if (intent == null) {
+            VpnLog.add("сервис перезапущен системой — поднимаю туннель из сохранённого конфига")
+        }
         val config = intent?.getStringExtra(EXTRA_CONFIG)?.takeIf { it.isNotBlank() }
             ?: Store.lastConfig(this).takeIf { it.isNotBlank() }
         if (config.isNullOrBlank()) {
@@ -399,6 +402,22 @@ class WingerVpnService : VpnService() {
                 } else {
                     VpnLog.pruneCoreLog(coreLogFile)
                 }
+                // Ядро могло умереть, а процесс остаться: тогда tcp/tun пропадает,
+                // интерфейс показывает «подключено», но трафик не идёт. Проверяем
+                // наличие tun и, если его нет, поднимаем туннель заново.
+                if (sec >= 60 && sec % 60 < 5 && !tunPresent()) {
+                    VpnLog.add("tun исчез — перезапускаю туннель")
+                    val cfg = Store.lastConfig(this@WingerVpnService)
+                    if (cfg.isNotBlank() && generation.get() == gen) {
+                        // Новое поколение отменяет текущий цикл и старый watchdog.
+                        val next = generation.incrementAndGet()
+                        stopCore(restarting = true)
+                        Thread {
+                            runCatching { startSingBox(cfg, next) }
+                                .onFailure { VpnLog.add("перезапуск не удался: ${err(it)}") }
+                        }.start()
+                    }
+                }
                 delay = if (sec < 60) 5_000L else 30_000L
             }
         }.apply {
@@ -406,6 +425,16 @@ class WingerVpnService : VpnService() {
             isDaemon = true
         }.start()
     }
+
+    /**
+     * Живо ли ядро: единственный внешний признак — наличие tun-интерфейса.
+     * При ошибке доступа считаем, что интерфейс на месте (лучше не перезапускать
+     * зря, чем устроить цикл переподключений).
+     */
+    private fun tunPresent(): Boolean = runCatching {
+        JavaNetworkInterface.getNetworkInterfaces().toList()
+            .any { it.isUp && it.name.startsWith("tun") }
+    }.getOrDefault(true)
 
     private fun stopCore(restarting: Boolean = false) {
         // Прослойка LTE4 держит исходящий WSS: закрываем вместе с ядром.
