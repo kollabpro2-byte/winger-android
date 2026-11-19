@@ -250,31 +250,44 @@ object Store {
     /**
      * Сколько параллельных отправок вниз просить у релея (`f=1cN`).
      *
-     * 32 — лучший замер релея. На слабых телефонах стартуем с меньшего числа, а
-     * прослойка снижает его дальше, если кадры не поднимаются.
+     * 32 — лучший замер релея. Снижение запоминается только на 3 часа: раньше
+     * оно оставалось навсегда, и один плохой вечер (нода лежала, кадры не
+     * поднимались) навсегда оставлял телефон на 8 потоках.
      */
     fun lte4Streams(ctx: Context): Int {
-        val stored = prefs(ctx)?.getInt("lte4Streams", 0) ?: 0
-        if (stored in 1..32) return stored
-        val guess = defaultStreams(ctx)
-        write(ctx) { putInt("lte4Streams", guess) }
+        val p = prefs(ctx) ?: return STREAMS_DEFAULT
+        val stored = p.getInt("lte4Streams", 0)
+        val at = p.getLong("lte4StreamsAt", 0L)
+        val fresh = at > 0L && System.currentTimeMillis() - at < STREAMS_TTL_MS
+        if (stored in 1..32 && fresh) return stored
+        val guess = lte4StreamsDefault(ctx)
+        write(ctx) {
+            putInt("lte4Streams", guess)
+            putLong("lte4StreamsAt", System.currentTimeMillis())
+        }
         return guess
     }
 
-    fun lte4Streams(ctx: Context, n: Int) = write(ctx) { putInt("lte4Streams", n.coerceIn(1, 32)) }
+    fun lte4Streams(ctx: Context, n: Int) = write(ctx) {
+        putInt("lte4Streams", n.coerceIn(1, 32))
+        putLong("lte4StreamsAt", System.currentTimeMillis())
+    }
 
-    /** Стартовое число потоков по памяти устройства. */
-    private fun defaultStreams(ctx: Context): Int = try {
+    /** Верхняя граница для этого устройства: до неё прослойка поднимает потоки. */
+    fun lte4StreamsDefault(ctx: Context): Int = try {
         val am = ctx.getSystemService(android.app.ActivityManager::class.java)
         when {
-            am == null -> 32
+            am == null -> STREAMS_DEFAULT
             am.isLowRamDevice -> 8
             am.memoryClass < 192 -> 16
-            else -> 32
+            else -> STREAMS_DEFAULT
         }
     } catch (_: Throwable) {
-        32
+        STREAMS_DEFAULT
     }
+
+    private const val STREAMS_DEFAULT = 32
+    private const val STREAMS_TTL_MS = 3L * 60L * 60L * 1000L
 
     /**
      * Маршрутизация и DNS из подписки включены всегда: в подписках Remnawave

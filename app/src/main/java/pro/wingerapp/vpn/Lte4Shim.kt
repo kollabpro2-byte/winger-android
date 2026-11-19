@@ -39,7 +39,9 @@ internal class Lte4Shim(
     /** Режим: кадры включены всегда, см. [Store.lte4Mode]. */
     private val mode: Int = Lte4.MODE_FRAMED,
     initialStreams: Int = 32,
-    /** Куда сообщить уменьшенное число потоков, чтобы оно пережило перезапуск. */
+    /** Потолок для этого устройства: до него поднимаемся, если всё работает. */
+    private val maxStreams: Int = initialStreams,
+    /** Куда сообщить изменённое число потоков, чтобы оно пережило перезапуск. */
     private val onStreamsChanged: (Int) -> Unit = {},
     private val protect: (Socket) -> Boolean,
 ) {
@@ -109,6 +111,22 @@ internal class Lte4Shim(
             framedDisabled = true
             VpnLog.add("LTE4 shim: кадры не поднялись $n раз — перехожу на обычный /ws")
         }
+    }
+
+    /**
+     * Соединение отработало с реальным трафиком — можно вернуть потоки обратно:
+     * телефон не «не тянет», а просто попал в плохой момент (нода лежала).
+     * Поднимаем по одному шагу, чтобы не устроить качели.
+     */
+    private fun noteFramedSuccess(bytes: Long) {
+        if (bytes < RAMP_BYTES || streams >= maxStreams) return
+        val next = when {
+            streams <= 8 -> 16
+            else -> 32
+        }.coerceAtMost(maxStreams)
+        streams = next
+        runCatching { onStreamsChanged(next) }
+        VpnLog.add("LTE4 shim: соединение живое, поднимаю потоки до $next")
     }
 
     /**
@@ -431,6 +449,9 @@ internal class Lte4Shim(
          * потеря, и тянуть дальше нет смысла.
          */
         const val GAP_TIMEOUT_MS = 15_000L
+
+        /** Сколько байт должно пройти в соединении, чтобы считать его рабочим. */
+        const val RAMP_BYTES = 1_000_000L
     }
 
     /**
@@ -660,6 +681,9 @@ internal class Lte4Shim(
         } finally {
             if (ticker != null) tickers -= ticker
             websockets -= ws
+            if (useFramed && state.open) {
+                noteFramedSuccess(state.sentBytes + state.recvBytes)
+            }
             // Хвост, который ещё лежит в склейке или в очереди кадров, надо отдать:
             // иначе последний кусок запроса не дойдёт и страница/файл повиснут.
             if (autoUp != null && pusher != null && state.open) {

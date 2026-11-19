@@ -203,6 +203,11 @@ class WingerVpnService : VpnService() {
         // её нет вовсе — ядро идёт в шлюз напрямую, как Xray.
         val lte4Mode = Store.lte4Mode(this)
         val lte4Streams = Store.lte4Streams(this)
+        val lte4MaxStreams = Store.lte4StreamsDefault(this)
+        // Видно в логе, откуда взялось число: снижение помнится только 3 часа.
+        VpnLog.add(
+            "LTE4: старт с $lte4Streams потоков (потолок устройства $lte4MaxStreams)"
+        )
         val shimPort = if (lte4Mode == Lte4.MODE_OFF) {
             0
         } else {
@@ -210,6 +215,7 @@ class WingerVpnService : VpnService() {
                 val s = shim ?: Lte4Shim(
                     mode = lte4Mode,
                     initialStreams = lte4Streams,
+                    maxStreams = lte4MaxStreams,
                     onStreamsChanged = { n -> Store.lte4Streams(this, n) },
                 ) { socket -> protect(socket) }.also { shim = it }
                 s.start()
