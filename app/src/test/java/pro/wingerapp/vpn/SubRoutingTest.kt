@@ -134,6 +134,10 @@ class SubRoutingTest {
         // Без detour: ядро отвечает "detour to an empty direct outbound makes no
         // sense", а сервер без detour и так идёт мимо туннеля.
         assertFalse(directDoh.has("detour"))
+        // Доменный адрес DoH без domain_resolver валит старт ядра:
+        // "missing domain resolver for domain server address".
+        assertEquals("bootstrap", directDoh.getString("domain_resolver"))
+        assertTrue(entries.any { it.optString("tag") == "bootstrap" })
 
         val rules = dns.getJSONArray("rules")
         // habr → DoH через прокси, ozon → DoH мимо, nalog → hosts.

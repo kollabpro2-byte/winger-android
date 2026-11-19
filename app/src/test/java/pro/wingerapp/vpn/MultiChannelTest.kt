@@ -79,7 +79,52 @@ class MultiChannelTest {
         assertEquals(0, splitRules(sb).size)
     }
 
-    /** Разные UUID — это разные узлы, склеивать их в каналы нельзя. */
+    @Test
+    fun subscriptionProfileGivesThreeChannels() {
+        // Подписка отдаёт один вход, но у узла их три (профиль CDN по путям).
+        val sb = JSONObject(
+            toSingBox(xrayConfigFor(cdnConfig("/api/v2/dicom/sync/"), "ya"), TunnelOptions())
+        )
+        assertEquals(listOf("direct", "proxy", "proxy2", "proxy3"), tags(sb))
+
+        val outs = sb.getJSONArray("outbounds")
+        val paths = (1..3).map { outs.getJSONObject(it).getJSONObject("transport").getString("path") }
+        assertEquals(
+            listOf(
+                "/api/v2/dicom/sync/",
+                "/api/v3/pwa/sync/stream/",
+                "/api/v2/vault/sync/datastream/",
+            ),
+            paths,
+        )
+        assertEquals(3, splitRules(sb).size)
+    }
+
+    @Test
+    fun unknownPathStaysSingleChannel() {
+        // Путь не из профиля — значит схему поменяли; молча ломать трафик нельзя.
+        val sb = JSONObject(
+            toSingBox(xrayConfigFor(cdnConfig("/api/other/"), "ya"), TunnelOptions())
+        )
+        assertEquals(listOf("direct", "proxy"), tags(sb))
+        assertEquals(0, splitRules(sb).size)
+    }
+
+    private fun cdnConfig(path: String): String = """
+        [
+          { "remarks": "ya", "outbounds": [
+            { "tag": "proxy", "protocol": "vless",
+              "settings": { "vnext": [ { "address": "ya5.wingertop.pro", "port": 443,
+                "users": [ { "id": "uuid-1", "encryption": "none" } ] } ] },
+              "streamSettings": { "network": "xhttp", "security": "tls",
+                "tlsSettings": { "serverName": "ya5.wingertop.pro",
+                  "pinnedPeerCertSha256": "ab12", "alpn": ["h2", "http/1.1"] },
+                "xhttpSettings": { "host": "ya5.wingertop.pro", "path": "$path",
+                  "mode": "packet-up" } } },
+            { "tag": "direct", "protocol": "freedom" } ] }
+        ]
+    """.trimIndent()
+
     @Test
     fun differentUuidIsNotMerged() {
         val raw = """

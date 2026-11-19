@@ -186,6 +186,9 @@ internal object RoutingPlan {
         val rules = JSONArray()
         var finalTag: String? = null
         var index = 0
+        // DoH/DoT-серверу с доменным адресом ядро требует свой резолвер:
+        // "missing domain resolver for domain server address". Даём bootstrap.
+        var needsBootstrap = false
 
         for (i in 0 until xservers.length()) {
             val s = xservers.optJSONObject(i) ?: continue
@@ -195,6 +198,11 @@ internal object RoutingPlan {
             val entry = serverEntry(address, tag, skipped)
             if (entry == null) continue
             index++
+            val host = entry.optString("server")
+            if (host.isNotBlank() && !isIpLiteralHost(host)) {
+                entry.put("domain_resolver", "bootstrap")
+                needsBootstrap = true
+            }
             servers.put(entry)
 
             val matchers = JSONObject()
@@ -237,11 +245,23 @@ internal object RoutingPlan {
         }
 
         if (servers.length() == 0) return null
+        if (needsBootstrap) {
+            // Резолвер для самих DoH-серверов: обычный UDP по IP, работает без DNS.
+            servers.put(
+                JSONObject()
+                    .put("type", "udp")
+                    .put("tag", "bootstrap")
+                    .put("server", "1.1.1.1")
+            )
+        }
         val out = JSONObject().put("servers", servers)
         if (rules.length() > 0) out.put("rules", rules)
         if (finalTag != null) out.put("final", finalTag)
         return out
     }
+
+    private fun isIpLiteralHost(host: String): Boolean =
+        host.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$""")) || host.contains(':')
 
     /**
      * `https://` — DoH через туннель, `https+local://` — DoH мимо туннеля,

@@ -127,8 +127,22 @@ private fun channelPeers(xray: JSONObject, base: JSONObject): List<JSONObject> {
         peers += o
     }
     val paths = peers.map { pathOf(it) }.filter { it.isNotBlank() }.distinct()
-    if (paths.size < 2) return listOf(base)
-    return peers.distinctBy { pathOf(it) }.take(3)
+    if (paths.size > 1) {
+        // Подписка уже содержит несколько входов — берём их как есть.
+        return peers.distinctBy { pathOf(it) }.take(3)
+    }
+    // Один вход: возможно, это профиль CDN, у которого остальные пути известны.
+    val profile = CdnProfiles.pathsFor(baseAddress, pathOf(base)) ?: return listOf(base)
+    return profile.map { p -> cloneWithPath(base, p) }
+}
+
+/** Копия outbound'а с другим путём: адрес, UUID и TLS остаются теми же. */
+private fun cloneWithPath(base: JSONObject, path: String): JSONObject {
+    val copy = JSONObject(base.toString())
+    val stream = copy.optJSONObject("streamSettings") ?: JSONObject().also { copy.put("streamSettings", it) }
+    val xhttp = stream.optJSONObject("xhttpSettings") ?: JSONObject().also { stream.put("xhttpSettings", it) }
+    xhttp.put("path", path)
+    return copy
 }
 
 /**
