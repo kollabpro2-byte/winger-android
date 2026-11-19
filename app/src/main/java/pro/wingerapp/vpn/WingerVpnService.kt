@@ -231,6 +231,9 @@ class WingerVpnService : VpnService() {
         // Роутинг и DNS из подписки включены всегда; при отказе ядра отступаем
         // по шагам — сначала без DNS, потом совсем без правил.
         var subRouting = RoutingPlan.RULES_AND_DNS
+        // Несколько входов CDN (клиент → CDN → N входов). Если ядро не примет
+        // правила по диапазонам портов — вернёмся к одному каналу.
+        var multiChannel = true
         while (true) {
             val sbConfig = try {
                 toSingBox(
@@ -246,6 +249,7 @@ class WingerVpnService : VpnService() {
                         ipv6Proxy = Store.ipv6Proxy(this),
                         shimPort = shimPort,
                         subRouting = subRouting,
+                        multiChannel = multiChannel,
                     ),
                 )
             } catch (e: Throwable) {
@@ -296,6 +300,12 @@ class WingerVpnService : VpnService() {
                 // Любая ошибка запуска ядра: сначала отступаем по роутингу из
                 // подписки — он необязателен, а туннель нужен. Это ловит и такие
                 // ответы, как "detour to an empty direct outbound makes no sense".
+                if (multiChannel && attempt < 8) {
+                    multiChannel = false
+                    VpnLog.add("многоканальный режим отвергнут ($message) — повтор с одним каналом")
+                    attempt++
+                    continue
+                }
                 if (subRouting != RoutingPlan.OFF && attempt < 8) {
                     subRouting = if (subRouting == RoutingPlan.RULES_AND_DNS) {
                         RoutingPlan.RULES

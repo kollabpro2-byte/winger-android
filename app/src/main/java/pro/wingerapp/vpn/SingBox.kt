@@ -20,6 +20,12 @@ data class TunnelOptions(
      * [RoutingPlan.RULES_AND_DNS] — правила и DNS-серверы.
      */
     val subRouting: Int = RoutingPlan.OFF,
+    /**
+     * Разводить потоки по нескольким XHTTP-входам одного узла (схема
+     * «клиент → CDN → несколько входов → сервер»). Выключается автоматически,
+     * если ядро не примет конфиг.
+     */
+    val multiChannel: Boolean = true,
     val useMux: Boolean = false,
     val mtu: Int = 1500,
     val coreLogFile: String? = null,
@@ -62,9 +68,16 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val outbounds = xray.optJSONArray("outbounds") ?: JSONArray()
     val proxy = firstVless(outbounds)
         ?: error("в подписке нет VLESS-сервера — туннель не поднят")
-    val proxyOutbound = convertVless(
-        proxy, opts.useMux, opts.minimalTransport, opts.dropXhttpFields, opts.ipv6Proxy, opts.shimPort,
-    )
+    // Несколько входов одного узла (клиент → CDN → N входов) разводим по потокам.
+    val chain = if (opts.multiChannel) channelPeers(xray, proxy) else listOf(proxy)
+    val proxies = chain.mapIndexed { i, ob ->
+        convertVless(
+            ob, opts.useMux, opts.minimalTransport, opts.dropXhttpFields, opts.ipv6Proxy, opts.shimPort,
+            tag = if (i == 0) "proxy" else "proxy${i + 1}",
+        )
+    }
+    val proxyOutbound = proxies.first()
+    val proxyTags = proxies.map { it.getString("tag") }
     val sb = JSONObject()
     sb.put("log", coreLog(opts.coreLogFile))
     // Правила и DNS из подписки — если пользователь их включил и они там есть.
@@ -75,11 +88,47 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val subDns = if (opts.subRouting == RoutingPlan.RULES_AND_DNS) plan?.dns else null
     sb.put("dns", subDns ?: dnsSection(opts.dnsServer))
     sb.put("inbounds", JSONArray().put(tunInbound(opts.mtu)))
-    sb.put("outbounds", JSONArray()
-        .put(JSONObject().put("type", "direct").put("tag", "direct"))
-        .put(proxyOutbound))
-    sb.put("route", routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules))
+    val outboundsJson = JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct"))
+    for (p in proxies) outboundsJson.put(p)
+    sb.put("outbounds", outboundsJson)
+    sb.put(
+        "route",
+        routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules, proxyTags),
+    )
     return sb.toString()
+}
+
+/**
+ * Несколько XHTTP-входов одного узла: одинаковые адрес, порт и UUID, но разные
+ * пути. Так выглядит схема «клиент → CDN → три входа → сервер»: каждый вход — свой
+ * сокет на сервере, и разводить потоки по ним приходится клиенту.
+ */
+private fun channelPeers(xray: JSONObject, base: JSONObject): List<JSONObject> {
+    fun vnext(o: JSONObject): JSONObject =
+        o.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
+
+    fun stream(o: JSONObject): JSONObject = o.optJSONObject("streamSettings") ?: JSONObject()
+    fun pathOf(o: JSONObject): String =
+        stream(o).optJSONObject("xhttpSettings")?.optString("path").orEmpty()
+
+    val baseAddress = vnext(base).optString("address")
+    val basePort = vnext(base).optInt("port", 443)
+    val baseUuid = vnext(base).optJSONArray("users")?.optJSONObject(0)?.optString("id").orEmpty()
+
+    val obs = xray.optJSONArray("outbounds") ?: return listOf(base)
+    val peers = ArrayList<JSONObject>(3)
+    for (i in 0 until obs.length()) {
+        val o = obs.optJSONObject(i) ?: continue
+        if (!o.optString("protocol").equals("vless", true)) continue
+        if (stream(o).optString("network").lowercase() !in setOf("xhttp", "splithttp")) continue
+        if (vnext(o).optString("address") != baseAddress) continue
+        if (vnext(o).optInt("port", 443) != basePort) continue
+        if (vnext(o).optJSONArray("users")?.optJSONObject(0)?.optString("id").orEmpty() != baseUuid) continue
+        peers += o
+    }
+    val paths = peers.map { pathOf(it) }.filter { it.isNotBlank() }.distinct()
+    if (paths.size < 2) return listOf(base)
+    return peers.distinctBy { pathOf(it) }.take(3)
 }
 
 /**
@@ -92,10 +141,11 @@ private fun routeSection(
     directDomains: List<String>,
     proxyServer: String,
     subRules: JSONArray? = null,
+    channelTags: List<String> = emptyList(),
 ): JSONObject {
     val route = JSONObject()
         .put("auto_detect_interface", true)
-        .put("rules", routeRules(directDomains, subRules))
+        .put("rules", routeRules(directDomains, subRules, channelTags))
     if (!isIpLiteral(proxyServer)) route.put("default_domain_resolver", "bootstrap")
     return route
 }
@@ -171,7 +221,11 @@ private fun firstVless(obs: JSONArray): JSONObject? {
  * Bypass entries come from the UI as bare hosts, but older versions stored
  * "domain:bank.ru" and users may paste URLs. Normalise both.
  */
-internal fun routeRules(raw: List<String>, subRules: JSONArray? = null): JSONArray {
+internal fun routeRules(
+    raw: List<String>,
+    subRules: JSONArray? = null,
+    channelTags: List<String> = emptyList(),
+): JSONArray {
     val hosts = raw.mapNotNull { line ->
         val host = line.trim().lowercase()
             .removePrefix("domain:")
@@ -200,6 +254,22 @@ internal fun routeRules(raw: List<String>, subRules: JSONArray? = null): JSONArr
             val rule = subRules.optJSONObject(i) ?: continue
             if (rule.optString("action") == "hijack-dns") continue
             rules.put(rule)
+        }
+    }
+    // Разные потоки — разные входы CDN. Порт источника у каждого соединения
+    // случайный, поэтому равные диапазоны делят трафик почти поровну. Это
+    // единственный per-connection ключ, который есть в sing-box: balancer'а,
+    // как в Xray, у него нет.
+    if (channelTags.size > 1) {
+        for ((i, tag) in channelTags.withIndex()) {
+            val lo = 65536 * i / channelTags.size
+            val hi = 65536 * (i + 1) / channelTags.size - 1
+            rules.put(
+                JSONObject()
+                    .put("source_port_range", JSONArray().put("$lo:$hi"))
+                    .put("action", "route")
+                    .put("outbound", tag)
+            )
         }
     }
     rules.put(JSONObject().put("action", "route").put("outbound", "proxy"))
@@ -263,6 +333,17 @@ private fun convertVless(
     dropXhttpFields: Set<String> = emptySet(),
     ipv6Proxy: Boolean = false,
     shimPort: Int = 0,
+    tag: String = "proxy",
+): JSONObject = convertVlessBody(xray, useMux, minimalTransport, dropXhttpFields, ipv6Proxy, shimPort, tag)
+
+private fun convertVlessBody(
+    xray: JSONObject,
+    useMux: Boolean,
+    minimalTransport: Boolean,
+    dropXhttpFields: Set<String>,
+    ipv6Proxy: Boolean,
+    shimPort: Int,
+    tag: String,
 ): JSONObject {
     val settings = xray.optJSONObject("settings") ?: JSONObject()
     val vnext = settings.optJSONArray("vnext")?.optJSONObject(0) ?: JSONObject()
@@ -280,7 +361,7 @@ private fun convertVless(
 
     val sb = JSONObject()
     sb.put("type", "vless")
-    sb.put("tag", "proxy")
+    sb.put("tag", tag)
     if (viaShim) {
         sb.put("server", "127.0.0.1")
         sb.put("server_port", shimPort)
