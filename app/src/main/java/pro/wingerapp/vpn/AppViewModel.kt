@@ -319,22 +319,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         return@async node.name to cached.second
                     }
                     val ms = pingGate.withPermit {
-                        // Сначала конечный сервер цепочки: пинг до первого хопа
-                        // (CDN-края) даёт красивое, но неправдивое число.
-                        val terminal = terminalEndpoints(parsed.raw, node.name)
-                        val others = tcpEndpoints(parsed.raw, node.name)
-                        val points = (terminal + others).distinct()
-                            .filter { it.host.isNotBlank() && it.port in 1..65535 }
-                        if (points.isEmpty()) {
-                            -1
-                        } else {
-                            val real = terminal.firstOrNull()
-                                ?.let { p -> tcpPing(p.host, p.port) }
-                            // Конечный сервер не отвечает напрямую (бывает за CDN) —
-                            // тогда показываем хоть какую-то доступность, но не
-                            // подменяем ею честный замер.
-                            real ?: points.mapNotNull { p -> tcpPing(p.host, p.port) }.minOrNull()
-                        }
+                        // Только конечный сервер цепочки и никаких «запасных»
+                        // адресов: край CDN отвечает всегда, и тогда пинг есть даже
+                        // у мёртвой ноды — ровно на это и жаловались.
+                        val terminal = terminalEndpoints(parsed.raw, node.name).firstOrNull()
+                        val target = terminal ?: Endpoint(
+                            node.host,
+                            if (node.port in 1..65535) node.port else 443,
+                        )
+                        if (target.host.isBlank()) -1
+                        else tcpPing(target.host, target.port) ?: -1
                     }
                     synchronized(pingCacheLock) {
                         pingCache[node.name] = System.currentTimeMillis() to ms

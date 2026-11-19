@@ -1,6 +1,8 @@
 package pro.wingerapp.vpn
 
+import java.net.InetAddress
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -114,5 +116,32 @@ class EndpointChainTest {
     @Test
     fun malformedJsonDoesNotThrow() {
         assertTrue(terminalEndpoints("{not json", "x").isEmpty())
+    }
+
+    /**
+     * 0.0.0.0 и 127.0.0.1 принимают TCP мгновенно, не выходя в сеть — из-за них
+     * у всех серверов одновременно появлялся «пинг 1 мс».
+     */
+    @Test
+    fun serviceAddressesAreNotMeasured() {
+        assertFalse(isUsableAddress(InetAddress.getByName("0.0.0.0")))
+        assertFalse(isUsableAddress(InetAddress.getByName("127.0.0.1")))
+        assertFalse(isUsableAddress(InetAddress.getByName("169.254.1.1")))
+        assertTrue(isUsableAddress(InetAddress.getByName("8.8.8.8")))
+    }
+
+    /** Имя, которое резолвится в локальную сеть, — это подменённый DNS. */
+    @Test
+    fun nameResolvedToLanIsIgnored() {
+        assertFalse(isSaneResolvedAddress(InetAddress.getByName("192.168.1.1")))
+        assertFalse(isSaneResolvedAddress(InetAddress.getByName("10.0.0.7")))
+        assertFalse(isSaneResolvedAddress(InetAddress.getByName("172.19.0.1")))
+        assertTrue(isSaneResolvedAddress(InetAddress.getByName("8.8.8.8")))
+    }
+
+    /** Явный LAN-адрес в подписке — выбор пользователя, его мерим. */
+    @Test
+    fun explicitLanLiteralIsStillAllowed() {
+        assertTrue(isUsableAddress(InetAddress.getByName("192.168.1.10")))
     }
 }
