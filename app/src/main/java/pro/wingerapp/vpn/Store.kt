@@ -255,20 +255,16 @@ object Store {
      * поднимались) навсегда оставлял телефон на 8 потоках.
      */
     fun lte4Streams(ctx: Context): Int {
-        val p = prefs(ctx) ?: return STREAMS_DEFAULT
-        val stored = p.getInt("lte4Streams", 0)
-        val at = p.getLong("lte4StreamsAt", 0L)
-        val fresh = at > 0L && System.currentTimeMillis() - at < STREAMS_TTL_MS
-        if (stored in 1..32 && fresh) return stored
-        val guess = lte4StreamsDefault(ctx)
-        write(ctx) {
-            putInt("lte4Streams", guess)
-            putLong("lte4StreamsAt", System.currentTimeMillis())
-        }
-        return guess
+        // Снижение потоков живёт только внутри сессии. Раньше оно сохранялось в
+        // настройках, и после одного плохого вечера (нода лежала, кадры не
+        // поднимались) телефон оставался на 8 потоках навсегда — даже когда
+        // сервер уже работал. Потолок устройства считаем заново при каждом старте.
+        return lte4StreamsDefault(ctx)
     }
 
     fun lte4Streams(ctx: Context, n: Int) = write(ctx) {
+        // Оставлено для обратной совместимости: значение больше не читается при
+        // старте, но пусть в настройках лежит актуальное — пригодится в логах.
         putInt("lte4Streams", n.coerceIn(1, 32))
         putLong("lte4StreamsAt", System.currentTimeMillis())
     }
@@ -278,8 +274,10 @@ object Store {
         val am = ctx.getSystemService(android.app.ActivityManager::class.java)
         when {
             am == null -> STREAMS_DEFAULT
-            am.isLowRamDevice -> 8
-            am.memoryClass < 192 -> 16
+            // Устройства с малым объёмом памяти: 32 потока там действительно
+            // могут не тянуть, но и 8 — перебор, кадры работают и на 16.
+            am.isLowRamDevice -> 16
+            am.memoryClass < 128 -> 16
             else -> STREAMS_DEFAULT
         }
     } catch (_: Throwable) {
@@ -287,7 +285,6 @@ object Store {
     }
 
     private const val STREAMS_DEFAULT = 32
-    private const val STREAMS_TTL_MS = 3L * 60L * 60L * 1000L
 
     /**
      * Маршрутизация и DNS из подписки включены всегда: в подписках Remnawave

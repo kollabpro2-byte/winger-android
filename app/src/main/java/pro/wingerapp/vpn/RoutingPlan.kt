@@ -29,44 +29,64 @@ internal object RoutingPlan {
     const val RULES_AND_DNS = 2
 
     /** Правила для sing-box плюс DNS-блок (null — оставить наш). */
-    class Plan(val rules: JSONArray, val dns: JSONObject?, val skipped: List<String>)
+    class Plan(
+        val rules: JSONArray,
+        val dns: JSONObject?,
+        val ruleSets: JSONArray?,
+        val skipped: List<String>,
+    )
 
     fun build(xray: JSONObject): Plan? {
         val routing = xray.optJSONObject("routing") ?: return null
         val xrules = routing.optJSONArray("rules") ?: return null
         val skipped = ArrayList<String>()
         val rules = JSONArray()
+        val ruleSets = JSONArray()
+        val seenSets = HashSet<String>()
         for (i in 0 until xrules.length()) {
             val rule = xrules.optJSONObject(i) ?: continue
-            convertRule(rule, skipped)?.let { rules.put(it) }
+            convertRule(rule, rules, ruleSets, seenSets, skipped)
         }
         val dns = convertDns(xray.optJSONObject("dns"), skipped)
         if (rules.length() == 0 && dns == null) return null
-        return Plan(rules, dns, skipped.distinct())
+        return Plan(rules, dns, if (ruleSets.length() > 0) ruleSets else null, skipped.distinct())
     }
 
     // ---------------------------------------------------------------- правила
 
-    private fun convertRule(xray: JSONObject, skipped: MutableList<String>): JSONObject? {
+    private fun convertRule(
+        xray: JSONObject,
+        out: JSONArray,
+        ruleSets: JSONArray,
+        seenSets: MutableSet<String>,
+        skipped: MutableList<String>,
+    ) {
         val target = xray.optString("outboundTag").trim()
         // Правило без цели бессмысленно; dns-out и block — это не outbound'ы.
-        if (target.isBlank()) return null
+        if (target.isBlank()) return
         if (xray.has("inboundTag")) {
             skipped += "inboundTag"
-            return null
+            return
         }
         if (target == "dns-out") {
             // В Xray это «отдать запрос своему DNS». В sing-box то же самое —
             // перехват DNS, поэтому порт 53 здесь уже не нужен.
-            return JSONObject().put("action", "hijack-dns").put("protocol", "dns")
+            out.put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
+            return
         }
 
-        val rule = JSONObject()
-        var matched = false
+        // Xray объединяет разные поля правила через ИЛИ («домен ИЛИ адрес»), а
+        // sing-box внутри одного правила — через И. Поэтому каждую группу
+        // проверок выпускаем отдельным правилом с тем же действием: получается
+        // ровно та же логика.
+        val domains = JSONObject()
+        val sets = JSONArray()
+        domainMatchers(xray.optJSONArray("domain"), domains, skipped, sets, ruleSets, seenSets)
 
-        if (domainMatchers(xray.optJSONArray("domain"), rule, skipped)) matched = true
-        if (ipMatchers(xray.optJSONArray("ip"), rule, skipped)) matched = true
+        val ips = JSONObject()
+        ipMatchers(xray.optJSONArray("ip"), ips, skipped, sets, ruleSets, seenSets)
 
+        val ports = JSONArray()
         val port = xray.opt("port")
         val portNumber = when (port) {
             is Int -> port
@@ -74,33 +94,58 @@ internal object RoutingPlan {
             is String -> port.trim().toIntOrNull()
             else -> null
         }
-        if (portNumber != null) {
-            rule.put("port", portNumber)
-            matched = true
-        } else if (port != null) {
-            skipped += "port:$port"
-        }
+        if (portNumber != null) ports.put(portNumber) else if (port != null) skipped += "port:$port"
 
-        val protocols = protocols(xray.optJSONArray("protocol"), skipped)
-        if (protocols.isNotEmpty()) {
-            rule.put("protocol", JSONArray(protocols))
-            matched = true
-        }
+        val protos = protocols(xray.optJSONArray("protocol"), skipped)
 
-        if (!matched) return null
-
-        when (target) {
-            "block" -> rule.put("action", "reject")
-            "direct" -> rule.put("action", "route").put("outbound", "direct")
-            "proxy" -> rule.put("action", "route").put("outbound", "proxy")
-            else -> {
-                // Неизвестный тег (в подписке бывают свои) — считаем прокси:
-                // молча терять правило хуже, чем вести трафик в туннель.
-                skipped += "outbound:$target"
-                rule.put("action", "route").put("outbound", "proxy")
+        fun emit(rule: JSONObject) {
+            if (rule.length() == 0) return
+            when (target) {
+                "block" -> rule.put("action", "reject")
+                "direct" -> rule.put("action", "route").put("outbound", "direct")
+                "proxy" -> rule.put("action", "route").put("outbound", "proxy")
+                else -> {
+                    // Неизвестный тег (в подписке бывают свои) — считаем прокси:
+                    // молча терять правило хуже, чем вести трафик в туннель.
+                    skipped += "outbound:$target"
+                    rule.put("action", "route").put("outbound", "proxy")
+                }
             }
+            out.put(rule)
         }
-        return rule
+
+        emit(domains)
+        if (sets.length() > 0) emit(JSONObject().put("rule_set", sets))
+        emit(ips)
+        if (ports.length() > 0) emit(JSONObject().put("port", ports))
+        if (protos.isNotEmpty()) emit(JSONObject().put("protocol", JSONArray(protos)))
+    }
+
+    /**
+     * Набор geosite/geoip из официального репозитория SagerNet. Ядро скачает его
+     * при старте и положит в кэш (cache_file), так что повторные подключения
+     * работают без сети. Только эти два репозитория и только формат .srs.
+     */
+    private fun ruleSetEntry(
+        code: String,
+        geoip: Boolean,
+        ruleSets: JSONArray,
+        seen: MutableSet<String>,
+    ): String {
+        val prefix = if (geoip) "geoip" else "geosite"
+        val tag = "$prefix-$code"
+        if (seen.add(tag)) {
+            val repo = if (geoip) "sing-geoip" else "sing-geosite"
+            ruleSets.put(
+                JSONObject()
+                    .put("type", "remote")
+                    .put("tag", tag)
+                    .put("format", "binary")
+                    .put("url", "https://raw.githubusercontent.com/SagerNet/$repo/rule-set/$tag.srs")
+                    .put("download_detour", "direct"),
+            )
+        }
+        return tag
     }
 
     /** `domain:` → суффикс, `full:` → точное, `keyword:`/`regexp:` как есть. */
@@ -108,6 +153,9 @@ internal object RoutingPlan {
         list: JSONArray?,
         rule: JSONObject,
         skipped: MutableList<String>,
+        sets: JSONArray? = null,
+        ruleSets: JSONArray? = null,
+        seen: MutableSet<String>? = null,
     ): Boolean {
         if (list == null || list.length() == 0) return false
         val suffix = JSONArray()
@@ -122,7 +170,15 @@ internal object RoutingPlan {
                 raw.startsWith("full:") -> exact.put(raw.removePrefix("full:"))
                 raw.startsWith("keyword:") -> keyword.put(raw.removePrefix("keyword:"))
                 raw.startsWith("regexp:") -> regex.put(raw.removePrefix("regexp:"))
-                raw.startsWith("geosite:") -> skipped += raw
+                // Набор geosite — это отдельное правило-ссылка, а не список
+                // доменов: ядро скачает его при старте.
+                raw.startsWith("geosite:") -> {
+                    if (sets != null && ruleSets != null && seen != null) {
+                        sets.put(ruleSetEntry(raw.removePrefix("geosite:"), false, ruleSets, seen))
+                    } else {
+                        skipped += raw
+                    }
+                }
                 // Голое имя Xray трактует как домен с поддоменами.
                 else -> suffix.put(raw)
             }
@@ -141,6 +197,9 @@ internal object RoutingPlan {
         list: JSONArray?,
         rule: JSONObject,
         skipped: MutableList<String>,
+        sets: JSONArray? = null,
+        ruleSets: JSONArray? = null,
+        seen: MutableSet<String>? = null,
     ): Boolean {
         if (list == null || list.length() == 0) return false
         val cidrs = JSONArray()
@@ -150,6 +209,10 @@ internal object RoutingPlan {
             if (raw.isEmpty()) continue
             when {
                 raw == "geoip:private" -> privateRanges = true
+                // geoip-наборы не переносим: коды в подписках бывают
+                // нестандартными (`geoip:direct` в репозитории SagerNet нет —
+                // 404), а ядро падает на любом отсутствующем наборе. Главное
+                // (youtube, telegram, реклама, RU-домены) приходит через geosite.
                 raw.startsWith("geoip:") -> skipped += raw
                 raw.contains('/') -> cidrs.put(raw)
                 else -> cidrs.put("$raw/32")

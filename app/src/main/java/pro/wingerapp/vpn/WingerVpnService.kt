@@ -237,6 +237,9 @@ class WingerVpnService : VpnService() {
         // Роутинг и DNS из подписки включены всегда; при отказе ядра отступаем
         // по шагам — сначала без DNS, потом совсем без правил.
         var subRouting = RoutingPlan.RULES_AND_DNS
+        // Кэш для скачанных rule-set (geosite/geoip). Ядро может его не знать —
+        // тогда убираем и поднимаемся заново.
+        var cacheFile: String? = File(filesDir, "core-cache.db").absolutePath
         while (true) {
             val sbConfig = try {
                 toSingBox(
@@ -252,6 +255,7 @@ class WingerVpnService : VpnService() {
                         ipv6Proxy = Store.ipv6Proxy(this),
                         shimPort = shimPort,
                         subRouting = subRouting,
+                        cacheFile = cacheFile,
                     ),
                 )
             } catch (e: Throwable) {
@@ -299,6 +303,29 @@ class WingerVpnService : VpnService() {
                     attempt++
                     continue
                 }
+                // Кэш ядра не поддержан — убираем и пробуем снова без него.
+                if (cacheFile != null && message.contains("cache", true)) {
+                    VpnLog.add("ядро не знает cache_file — rule-set без кэша")
+                    cacheFile = null
+                    attempt++
+                    continue
+                }
+                // Rule-set (geosite/geoip) не скачался: сеть недоступна или URL
+                // недостижим. Отступаем по роутингу, туннель важнее.
+                if (subRouting != RoutingPlan.OFF && attempt < 8 &&
+                    (message.contains("rule_set", true) || message.contains("rule-set", true) ||
+                        message.contains("rule set", true))
+                ) {
+                    subRouting = if (subRouting == RoutingPlan.RULES_AND_DNS) {
+                        RoutingPlan.RULES
+                    } else {
+                        RoutingPlan.OFF
+                    }
+                    VpnLog.add("rule-set недоступен — роутинг подписки в режиме $subRouting")
+                    attempt++
+                    continue
+                }
+
                 // Любая ошибка запуска ядра: сначала отступаем по роутингу из
                 // подписки — он необязателен, а туннель нужен. Это ловит и такие
                 // ответы, как "detour to an empty direct outbound makes no sense".

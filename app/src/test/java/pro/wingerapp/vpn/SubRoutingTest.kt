@@ -45,11 +45,13 @@ class SubRoutingTest {
         )
         assertNotNull(p)
         val rules = p!!.rules
-        assertEquals(2, rules.length())
+        // Второе правило распадается на два: домены отдельно, geosite отдельно.
+        // Xray склеивает их через ИЛИ, а sing-box внутри правила — через И.
+        assertEquals(3, rules.length())
 
         val first = rules.getJSONObject(0)
         assertEquals("route", first.getString("action"))
-        assertEquals("direct", first.getString("outbound"))
+        assertEquals("direct", first.optString("outbound"))
         assertEquals("ozon.ru", first.getJSONArray("domain_suffix").getString(0))
         assertEquals("lkfl2.nalog.ru", first.getJSONArray("domain").getString(0))
         assertEquals("ads", first.getJSONArray("domain_keyword").getString(0))
@@ -57,10 +59,18 @@ class SubRoutingTest {
 
         val second = rules.getJSONObject(1)
         assertEquals("reject", second.getString("action"))
-        assertEquals(1, second.getJSONArray("domain_suffix").length())
+        assertEquals("yandex.ru", second.getJSONArray("domain_suffix").getString(0))
 
-        // geosite без rule-set перенести нечем — он честно попадает в пропущенные.
-        assertTrue(p.skipped.any { it.startsWith("geosite:") })
+        val third = rules.getJSONObject(2)
+        assertEquals("reject", third.getString("action"))
+        assertEquals("geosite-category-ads", third.getJSONArray("rule_set").getString(0))
+
+        // Набор попал в route.rule_set — иначе правило ссылалось бы в пустоту.
+        assertNotNull(p.ruleSets)
+        assertEquals("geosite-category-ads",
+            p.ruleSets!!.getJSONObject(0).getString("tag"))
+        // geosite больше не считается потерянным.
+        assertTrue(p.skipped.none { it.startsWith("geosite:") })
     }
 
     @Test

@@ -24,6 +24,10 @@ data class TunnelOptions(
     val mtu: Int = 1500,
     val coreLogFile: String? = null,
     /**
+     * Файл кэша ядра (там же живут скачанные rule-set). null — без кэша.
+     */
+    val cacheFile: String? = null,
+    /**
      * Drop every optional XHTTP knob. The core rejects the whole config with
      * "unknown field" on a single unrecognised key, so the service retries with
      * this flag after a decode error instead of leaving the user without a VPN.
@@ -82,9 +86,20 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     val outboundsJson = JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct"))
     outboundsJson.put(proxyOutbound)
     sb.put("outbounds", outboundsJson)
+    // Кэш ядра: сюда sing-box кладёт скачанные rule-set (geosite/geoip), иначе
+    // они качались бы при каждом подключении.
+    if (opts.cacheFile != null) {
+        sb.put(
+            "experimental",
+            JSONObject().put(
+                "cache_file",
+                JSONObject().put("enabled", true).put("path", opts.cacheFile),
+            ),
+        )
+    }
     sb.put(
         "route",
-        routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules),
+        routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules, plan?.ruleSets),
     )
     return sb.toString()
 }
@@ -100,10 +115,12 @@ private fun routeSection(
     directDomains: List<String>,
     proxyServer: String,
     subRules: JSONArray? = null,
+    ruleSets: JSONArray? = null,
 ): JSONObject {
     val route = JSONObject()
         .put("auto_detect_interface", true)
         .put("rules", routeRules(directDomains, subRules))
+    if (ruleSets != null) route.put("rule_set", ruleSets)
     if (!isIpLiteral(proxyServer)) route.put("default_domain_resolver", "bootstrap")
     return route
 }
