@@ -780,7 +780,7 @@ private fun ServerRow(
                 // и белом фоне не читаются.
                 val p = AppTheme.p
                 val c = when {
-                    ms == null || ms == -1 -> p.pingNone
+                    ms == null || ms == -1 || ms == -2 -> p.pingNone
                     ms < 120 -> p.pingFast
                     ms < 200 -> p.pingMid
                     else -> p.pingSlow
@@ -790,7 +790,10 @@ private fun ServerRow(
                     Text(
                         when {
                             ms == null -> noneLabel
-                            ms == -1 -> unknownLabel
+                            // −1: сервер не ответил. −2: узел через CDN, честного
+                            // числа нет — показываем «—», а не расстояние до края.
+                            ms == -1 -> noneLabel
+                            ms == -2 -> unknownLabel
                             else -> ms.toString()
                         },
                         color = c, fontSize = (8.25f * scale).sp, fontWeight = FontWeight.SemiBold,

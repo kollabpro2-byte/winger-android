@@ -318,6 +318,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (cached != null && now - cached.first < PING_TTL_MS) {
                         return@async node.name to cached.second
                     }
+                    // Край CDN отвечает на TCP сам, поэтому «пинг» до такого узла —
+                    // это расстояние до края, а не до сервера. Честного числа у
+                    // клиента нет: не меряем и показываем «—» (−2), иначе у
+                    // зарубежного сервера висело бы 2–3 мс.
+                    if (isCdnNode(parsed.raw, node.name)) {
+                        synchronized(pingCacheLock) {
+                            pingCache[node.name] = System.currentTimeMillis() to -2
+                        }
+                        return@async node.name to -2
+                    }
                     val ms = pingGate.withPermit {
                         // Только конечный сервер цепочки и никаких «запасных»
                         // адресов: край CDN отвечает всегда, и тогда пинг есть даже

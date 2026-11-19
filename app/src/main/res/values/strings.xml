@@ -32,7 +32,7 @@
     <string name="home_devices_value">%1$d из %2$s</string>
     <string name="home_loading">Загружаем подписку…</string>
     <string name="home_ping_none">нет</string>
-    <string name="home_ping_unknown">н/д</string>
+    <string name="home_ping_unknown">—</string>
     <string name="home_select_server_first">Сначала выберите сервер</string>
     <string name="home_subscription_updated">Подписка обновлена</string>
     <string name="home_subscription_failed">не удалось обновить подписку</string>

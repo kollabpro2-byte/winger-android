@@ -169,6 +169,28 @@ private fun namedConfig(raw: String, server: String): JSONObject {
     return first
 }
 
+/**
+ * Узел идёт через CDN: TCP-рукопожатие завершает край, а не сервер, поэтому
+ * «пинг» до такого узла измеряет край и обманывает — 2–3 мс у зарубежного
+ * сервера. Признаки: пиннинг серта в TLS (так подписывают серт края) или
+ * адрес из известных CDN-хостов.
+ */
+fun isCdnNode(raw: String, server: String): Boolean {
+    val cfg = runCatching { namedConfig(raw, server) }.getOrNull() ?: return false
+    val outs = cfg.optJSONArray("outbounds") ?: return false
+    for (i in 0 until outs.length()) {
+        val o = outs.optJSONObject(i) ?: continue
+        if (!o.optString("protocol").equals("vless", true)) continue
+        val addr = o.optJSONObject("settings")?.optJSONArray("vnext")
+            ?.optJSONObject(0)?.optString("address").orEmpty()
+        if (CdnProfiles.isCdnHost(addr)) return true
+        val tls = o.optJSONObject("streamSettings")?.optJSONObject("tlsSettings") ?: continue
+        if (tls.optString("pinnedPeerCertSha256").isNotBlank()) return true
+        if (tls.optString("verifyPeerCertByName").isNotBlank()) return true
+    }
+    return false
+}
+
 private fun jsonPort(node: JSONObject): Int {
     val raw = node.opt("port")
     return when (raw) {

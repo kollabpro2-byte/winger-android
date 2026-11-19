@@ -32,7 +32,7 @@
     <string name="home_devices_value">%1$d of %2$s</string>
     <string name="home_loading">Loading the subscription…</string>
     <string name="home_ping_none">none</string>
-    <string name="home_ping_unknown">n/a</string>
+    <string name="home_ping_unknown">—</string>
     <string name="home_select_server_first">Choose a server first</string>
     <string name="home_subscription_updated">Subscription updated</string>
     <string name="home_subscription_failed">could not refresh the subscription</string>
