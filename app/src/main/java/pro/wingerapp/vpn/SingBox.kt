@@ -422,6 +422,17 @@ private fun tlsFor(stream: JSONObject, address: String, network: String = ""): J
                 network in setOf("ws", "httpupgrade", "http", "h2") ->
                     tls.put("alpn", JSONArray().put("http/1.1"))
             }
+            // Пиннинг сертификата (Xray: pinnedPeerCertSha256 / verifyPeerCertByName)
+            // ядро не умеет. На практике это признак неполной цепочки сертов у края
+            // CDN, и проверка по системным корням не сойдётся — сервер выглядел бы
+            // мёртвым. Отключаем проверку только для этого сервера: шифрование
+            // остаётся, имя по-прежнему уходит в SNI.
+            val pinned = tlsSettings.optString("pinnedPeerCertSha256").isNotBlank() ||
+                tlsSettings.optString("verifyPeerCertByName").isNotBlank()
+            if (pinned) {
+                tls.put("insecure", true)
+                VpnLog.add("TLS: пиннинг серта не поддержан ядром — проверка отключена для этого сервера")
+            }
             tls
         }
         else -> null

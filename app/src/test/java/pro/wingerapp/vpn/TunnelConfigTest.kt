@@ -107,6 +107,21 @@ class TunnelConfigTest {
     }
 
     @Test
+    fun pinnedCertificateDisablesVerificationForThatServerOnly() {
+        // Ядро не умеет пиннинг серта (pinnedPeerCertSha256), а у края CDN бывает
+        // неполная цепочка: без отключения проверки сервер выглядел бы мёртвым.
+        val tls = """{"serverName":"ya5.wingertop.pro","pinnedPeerCertSha256":"ab12","alpn":["h2","http/1.1"]}"""
+        val withPin = proxy(pipe(node(network = "xhttp", security = "tls", tls = tls, address = "ya5.wingertop.pro")))
+        val t = withPin.getJSONObject("tls")
+        assertTrue(t.getBoolean("insecure"))
+        assertEquals("h2", t.getJSONArray("alpn").getString(0))
+
+        // Без пиннинга проверка серта остаётся включённой.
+        val plain = proxy(pipe(node(network = "tls", security = "tls")))
+        assertFalse(plain.getJSONObject("tls").has("insecure"))
+    }
+
+    @Test
     fun bypassDomainsBecomeDirectRules() {
         val sb = pipe(opts = TunnelOptions(directDomains = listOf("https://bank.ru/pay", "domain:ozon.ru", "  ")))
         val first = rules(sb).getJSONObject(0)
