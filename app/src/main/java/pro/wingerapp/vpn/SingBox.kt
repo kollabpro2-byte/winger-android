@@ -392,6 +392,9 @@ private fun convertVlessBody(
         pauseHint?.let { headers.put("X-Post-Pause-Ms", it.toString()) }
         xhttpExtra?.optInt("postParallel", 0)?.takeIf { it > 0 }
             ?.let { headers.put("X-Post-Parallel", it.toString()) }
+        // Висящих poll'ов больше одного — можно включить из подписки, без сборки.
+        xhttpExtra?.optInt("postPollers", 0)?.takeIf { it > 0 }
+            ?.let { headers.put("X-Post-Pollers", it.toString()) }
         if (xhttpExtra?.optBoolean("postPadding", true) == false) {
             headers.put("X-Padding", "0")
         }

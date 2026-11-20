@@ -512,7 +512,7 @@ internal class Lte4Shim(
 
         VpnLog.add(
             "LTE5: POST-chunks к $url, кусок ${chunkBytes.get() / 1024} КБ, пауза ${policy.pauseMs} мс, " +
-                "POST в полёте ${policy.parallel}, паддинг $padding"
+                "POST в полёте ${policy.parallel}, poll'ов ${policy.pollers}, паддинг $padding"
         )
 
         /** Подтверждение даунлинка: всё до этого seq сервер может забыть. */
@@ -608,29 +608,37 @@ internal class Lte4Shim(
         }
 
         // Poll = PING: сервер отдаёт накопленное вниз сразу в ответе. Пусто —
-        // пауза растёт 20 → 200 мс; после данных — снова минимум.
-        thread(isDaemon = true, name = "lte5-poll") {
-            while (alive.get() && running) {
-                try {
-                    val startedPoll = System.currentTimeMillis()
-                    val before = inFrames.get()
-                    deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
-                    val gotData = inFrames.get() != before
-                    if (gotData) emptyPolls.set(0) else emptyPolls.incrementAndGet()
-                    // Пока идёт обмен — PING раз в секунду; на тишине короткий
-                    // backoff: long-poll на сервере уже подождал данные 400 мс.
-                    val spent = System.currentTimeMillis() - startedPoll
-                    val delay = if (gotData) {
-                        (PING_INTERVAL_MS - spent).coerceAtLeast(0L)
-                    } else {
-                        PostChunks.pollDelayMs(emptyPolls.get().toInt())
+        // пауза растёт 20 → 200 мс; после данных — снова минимум. Висящих poll'ов
+        // может быть больше одного (с ack и long-poll это безопасно): каждый
+        // забирает свой кусок, и даунлинк не ждёт один поток.
+        repeat(policy.pollers) { index ->
+            thread(isDaemon = true, name = "lte5-poll-$index") {
+                while (alive.get() && running) {
+                    try {
+                        val startedPoll = System.currentTimeMillis()
+                        val before = inFrames.get()
+                        deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
+                        val gotData = inFrames.get() != before
+                        if (gotData) {
+                            emptyPolls.set(0)
+                        } else {
+                            emptyPolls.incrementAndGet()
+                        }
+                        // Пока идёт обмен — PING раз в секунду; на тишине короткий
+                        // backoff: long-poll на сервере уже подождал данные 400 мс.
+                        val spent = System.currentTimeMillis() - startedPoll
+                        val delay = if (gotData) {
+                            (PING_INTERVAL_MS - spent).coerceAtLeast(0L)
+                        } else {
+                            PostChunks.pollDelayMs(emptyPolls.get().toInt())
+                        }
+                        Thread.sleep(delay)
+                    } catch (e: Throwable) {
+                        VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
+                        alive.set(false)
+                        runCatching { local.close() }
+                        break
                     }
-                    Thread.sleep(delay)
-                } catch (e: Throwable) {
-                    VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
-                    alive.set(false)
-                    runCatching { local.close() }
-                    break
                 }
             }
         }

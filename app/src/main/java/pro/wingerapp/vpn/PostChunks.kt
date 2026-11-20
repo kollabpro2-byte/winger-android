@@ -52,6 +52,8 @@ internal object PostChunks {
         val chunkBytes: Int = 128 * 1024,
         val pauseMs: Long = 30,
         val parallel: Int = 2,
+        /** Сколько poll'ов держать висящими: с ack и long-poll 400 мс — безопасно 2. */
+        val pollers: Int = 1,
     ) {
         init {
             require(chunkBytes in 1024..MAX_BODY) { "chunkBytes вне 1..1 МБ" }
@@ -63,10 +65,12 @@ internal object PostChunks {
                 chunkBytes: Int?,
                 pauseMs: Long?,
                 parallel: Int?,
+                pollers: Int? = null,
             ): Policy = Policy(
                 chunkBytes = (chunkBytes ?: 128 * 1024).coerceIn(16 * 1024, 256 * 1024),
                 pauseMs = (pauseMs ?: 30L).coerceIn(0L, 500L),
                 parallel = (parallel ?: 2).coerceIn(1, 4),
+                pollers = (pollers ?: 1).coerceIn(1, 3),
             )
         }
     }
@@ -162,6 +166,7 @@ internal object PostChunkParams {
     private const val HEADER_CHUNK = "x-post-chunk-bytes"
     private const val HEADER_PAUSE = "x-post-pause-ms"
     private const val HEADER_PARALLEL = "x-post-parallel"
+    private const val HEADER_POLLERS = "x-post-pollers"
     private const val HEADER_PADDING = "x-padding"
 
     /** Хост Selectel CDN: `*.selcdn.net`. */
@@ -191,6 +196,7 @@ internal object PostChunkParams {
         headers[HEADER_CHUNK]?.trim()?.toIntOrNull(),
         headers[HEADER_PAUSE]?.trim()?.toLongOrNull(),
         headers[HEADER_PARALLEL]?.trim()?.toIntOrNull(),
+        headers[HEADER_POLLERS]?.trim()?.toIntOrNull(),
     )
 
     fun padding(headers: Map<String, String>): Boolean = headers[HEADER_PADDING]?.trim() != "0"
