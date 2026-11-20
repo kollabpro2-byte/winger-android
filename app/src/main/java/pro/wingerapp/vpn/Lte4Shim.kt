@@ -704,8 +704,6 @@ internal class Lte4Shim(
                         val wait = floor + backoff
                         if (wait > 0) Thread.sleep(wait)
 
-                        // Раз в 10 с пишем фактическую скорость по обеим сторонам:
-                        // по ней видно и эффект тюнинга, и куда смотреть при сбое.
                         val now = System.currentTimeMillis()
                         if (index == 0 && now - lastGapCheck >= GAP_CHECK_MS) {
                             lastGapCheck = now
@@ -724,6 +722,8 @@ internal class Lte4Shim(
                                 break
                             }
                         }
+                        // Раз в 10 с пишем фактическую скорость по обеим сторонам:
+                        // по ней видно и эффект тюнинга, и куда смотреть при сбое.
                         if (index == 0 && now - lastRateAt >= RATE_LOG_MS) {
                             val down = recvBytes.get()
                             val up = sentBytes.get()
