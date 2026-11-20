@@ -447,6 +447,13 @@ internal class Lte4Shim(
         const val RATE_LOG_MS = 10_000L
 
         /**
+         * Минимальный интервал между poll'ами. Без него два потока отправляют
+         * десятки POST в секунду, сессия занята ими, и аплинк (файлы в Telegram)
+         * перестаёт уходить. 30 мс — это ~33 POST/с на поток, дальше не растёт.
+         */
+        const val POLL_FLOOR_MS = 30L
+
+        /**
          * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
          * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
          * становились медленнее обычного режима. С паузой ≥5 мс склейки нет.
@@ -562,11 +569,14 @@ internal class Lte4Shim(
         }
 
         /**
-         * Один POST с данными. `503` ждём по `Retry-After`, `413` уменьшает кусок,
-         * сетевую ошибку повторяем один раз. `410` и прочее — наверх, там рвём
-         * соединение: sing-box переподключится и начнёт новую сессию с seq 0.
+         * Один POST. `503` ждём по `Retry-After`, `413` уменьшает кусок, сетевую
+         * ошибку повторяем один раз.
+         *
+         * [softErrors] — для poll'ов: одиночный сетевой сбой не должен рвать
+         * соединение (в логе 148 это выглядело как «вверх работает, вниз молчит»).
+         * `410`/`502` остаются фатальными всегда: сессия умерла.
          */
-        fun post(body: ByteArray, timeoutMs: Long): List<Lte4.Frame> {
+        fun post(body: ByteArray, timeoutMs: Long, softErrors: Boolean = false): List<Lte4.Frame> {
             var attempt = 0
             while (true) {
                 attempt += 1
@@ -590,7 +600,11 @@ internal class Lte4Shim(
                         else -> throw e
                     }
                 } catch (e: java.io.IOException) {
-                    if (attempt >= 2) throw e
+                    if (attempt >= 2) {
+                        if (!softErrors) throw e
+                        VpnLog.add("LTE5: poll без ответа (${e.javaClass.simpleName}) — продолжаю")
+                        return emptyList()
+                    }
                     runCatching { Thread.sleep(200) }
                 }
             }
@@ -618,35 +632,53 @@ internal class Lte4Shim(
         }
 
         // Poll = PING и одновременно путь вниз: каждый POST несёт максимум один
-        // кадр. Поэтому после ответа С ДАННЫМИ следующий poll идёт сразу — пауза
-        // между ними напрямую режет скорость. На тишине — короткий backoff:
-        // long-poll 400 мс на сервере уже подождал данные.
+        // кадр. После ответа с данными следующий poll идёт почти сразу, но с
+        // минимальным интервалом: без него два потока бомбят сессию десятками
+        // POST в секунду и душат аплинк (файлы в Telegram переставали уходить).
+        // На тишине — короткий backoff: long-poll 400 мс уже подождал данные.
         repeat(policy.pollers) { index ->
             thread(isDaemon = true, name = "lte5-poll-$index") {
                 var lastRateAt = System.currentTimeMillis()
                 var lastRecv = 0L
+                var lastSent = 0L
                 while (alive.get() && running) {
                     try {
+                        val startedPoll = System.currentTimeMillis()
                         val before = inFrames.get()
-                        deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
+                        deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS, softErrors = true))
                         val gotData = inFrames.get() != before
                         if (gotData) emptyPolls.set(0) else emptyPolls.incrementAndGet()
-                        if (!gotData) Thread.sleep(PostChunks.pollDelayMs(emptyPolls.get().toInt()))
 
-                        // Раз в 10 с пишем фактическую скорость вниз: по ней видно,
-                        // помогает ли тюнинг (это же цифра для сравнения режимов).
+                        val spent = System.currentTimeMillis() - startedPoll
+                        val floor = (POLL_FLOOR_MS - spent).coerceAtLeast(0L)
+                        val backoff = if (gotData) 0L else PostChunks.pollDelayMs(emptyPolls.get().toInt())
+                        val wait = floor + backoff
+                        if (wait > 0) Thread.sleep(wait)
+
+                        // Раз в 10 с пишем фактическую скорость по обеим сторонам:
+                        // по ней видно и эффект тюнинга, и куда смотреть при сбое.
                         val now = System.currentTimeMillis()
                         if (index == 0 && now - lastRateAt >= RATE_LOG_MS) {
-                            val bytes = recvBytes.get()
-                            val kbps = (bytes - lastRecv) * 1000 / (now - lastRateAt) / 1024
-                            if (kbps > 0) {
-                                VpnLog.add("LTE5: ↓$kbps КБ/с (всего ${bytes / 1024} КБ)")
+                            val down = recvBytes.get()
+                            val up = sentBytes.get()
+                            val ms = (now - lastRateAt).coerceAtLeast(1L)
+                            val downK = (down - lastRecv) * 1000 / ms / 1024
+                            val upK = (up - lastSent) * 1000 / ms / 1024
+                            if (downK > 0 || upK > 0) {
+                                VpnLog.add(
+                                    "LTE5: ↓$downK КБ/с ↑$upK КБ/с " +
+                                        "(всего ↓${down / 1024} ↑${up / 1024} КБ)"
+                                )
                             }
                             lastRateAt = now
-                            lastRecv = bytes
+                            lastRecv = down
+                            lastSent = up
                         }
                     } catch (e: Throwable) {
-                        VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
+                        val code = (e as? PostChunkHttpException)?.code
+                        VpnLog.add(
+                            "LTE5: poll остановлен (${e.javaClass.simpleName}${code?.let { " $it" } ?: ""})"
+                        )
                         alive.set(false)
                         runCatching { local.close() }
                         break
