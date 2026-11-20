@@ -127,6 +127,16 @@ private fun routeSection(
 
 private fun isIpLiteral(value: String): Boolean = value.matches(IPV4) || value.contains(':')
 
+/** `"15-50"` → 15: нижняя граница диапазона из подписки. */
+internal fun rangeLowerBound(text: String): Long? {
+    val first = text.trim().substringBefore('-').trim().toLongOrNull() ?: return null
+    return first.coerceIn(0L, 5_000L)
+}
+
+/** Границы куска для POST-chunks: 16–256 КБ по ответам серверной команды. */
+private const val MIN_POST_CHUNK = 16 * 1024
+private const val MAX_POST_CHUNK = 256 * 1024
+
 /** Short config summary for the log. Omits uuid, keys, short id and passwords. */
 fun summarizeSingBox(sbConfig: String): String = try {
     val o = JSONObject(sbConfig)
@@ -371,10 +381,15 @@ private fun convertVlessBody(
         val headers = JSONObject()
             .put("Host", address)
             .put("X-Post-Chunks", "1")
-        xhttpExtra?.optInt("postChunkBytes", 0)?.takeIf { it > 0 }
-            ?.let { headers.put("X-Post-Chunk-Bytes", it.toString()) }
-        xhttpExtra?.optInt("postPauseMs", 0)?.takeIf { it > 0 }
-            ?.let { headers.put("X-Post-Pause-Ms", it.toString()) }
+        // Кусок и пауза: явные поля, иначе из значений xhttp, как их кладёт панель
+        // (`scMaxEachPostBytes`, `scMinPostsIntervalMs: "15-50"`).
+        val chunkHint = xhttpExtra?.optInt("postChunkBytes", 0)?.takeIf { it > 0 }
+            ?: xhttpExtra?.opt("scMaxEachPostBytes")?.toString()?.trim()?.toIntOrNull()
+                ?.coerceIn(MIN_POST_CHUNK, MAX_POST_CHUNK)
+        chunkHint?.let { headers.put("X-Post-Chunk-Bytes", it.toString()) }
+        val pauseHint = xhttpExtra?.optInt("postPauseMs", 0)?.takeIf { it > 0 }
+            ?: xhttpExtra?.opt("scMinPostsIntervalMs")?.toString()?.let { rangeLowerBound(it) }
+        pauseHint?.let { headers.put("X-Post-Pause-Ms", it.toString()) }
         xhttpExtra?.optInt("postParallel", 0)?.takeIf { it > 0 }
             ?.let { headers.put("X-Post-Parallel", it.toString()) }
         if (xhttpExtra?.optBoolean("postPadding", true) == false) {

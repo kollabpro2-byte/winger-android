@@ -29,14 +29,17 @@ internal object PostChunks {
     /** Заголовок подтверждения даунлинка: последний непрерывно полученный seq. */
     const val ACK_HEADER = "X-Ack"
 
-    /** Заголовок идентификатора сессии. */
-    const val SESSION_HEADER = "X-Session"
+    /** Заголовок идентификатора сессии. Сервер принимает и `X-Session`, и `sid`. */
+    const val SESSION_HEADER = "X-Session-Id"
 
-    /** Сколько ждать ответ на POST с данными: сервер держит до 80 мс, запас большой. */
-    const val DATA_TIMEOUT_MS = 15_000L
+    /**
+     * Сколько ждать ответ на POST с данными: сервер держит до 80 мс плюс RTT CDN.
+     * 15 с — уже много: на таком таймауте обрыв виден слишком поздно.
+     */
+    const val DATA_TIMEOUT_MS = 5_000L
 
-    /** Poll: 2 с плюс long-poll на сервере (250–500 мс). */
-    const val POLL_TIMEOUT_MS = 2_500L
+    /** Poll: long-poll на сервере 400 мс плюс RTT — 3 с с запасом. */
+    const val POLL_TIMEOUT_MS = 3_000L
 
     /** Сколько минимум и максимум байт паддинга (по спеке 64–192). */
     val PADDING_RANGE = 64..192
@@ -175,6 +178,8 @@ internal object PostChunkParams {
     fun isPostChunksMode(xhttpMode: String, extra: Map<String, Any?>): Boolean {
         val mode = xhttpMode.trim().lowercase()
         if (mode == "post-chunks") return true
+        // Сервер кладёт свой режим внутрь extra — так приходит из панели.
+        if ((extra["mode"] as? String)?.trim()?.lowercase() == "post-chunks") return true
         if (extra["postChunks"] == true) return true
         return (extra["wingerTransport"] as? String)?.trim()?.lowercase() == "post-chunks"
     }

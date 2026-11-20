@@ -433,6 +433,9 @@ internal class Lte4Shim(
         /** Нижняя граница куска POST: мельче — слишком много запросов. */
         const val MIN_POST_CHUNK = 16 * 1024
 
+        /** PING раз в секунду, пока сессия жива (спека v2). */
+        const val PING_INTERVAL_MS = 1_000L
+
         /**
          * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
          * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
@@ -609,11 +612,20 @@ internal class Lte4Shim(
         thread(isDaemon = true, name = "lte5-poll") {
             while (alive.get() && running) {
                 try {
+                    val startedPoll = System.currentTimeMillis()
                     val before = inFrames.get()
                     deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
-                    // Данные пришли — пауза минимальная; тишина — растёт до 200 мс.
-                    if (inFrames.get() == before) emptyPolls.incrementAndGet() else emptyPolls.set(0)
-                    Thread.sleep(PostChunks.pollDelayMs(emptyPolls.get().toInt()))
+                    val gotData = inFrames.get() != before
+                    if (gotData) emptyPolls.set(0) else emptyPolls.incrementAndGet()
+                    // Пока идёт обмен — PING раз в секунду; на тишине короткий
+                    // backoff: long-poll на сервере уже подождал данные 400 мс.
+                    val spent = System.currentTimeMillis() - startedPoll
+                    val delay = if (gotData) {
+                        (PING_INTERVAL_MS - spent).coerceAtLeast(0L)
+                    } else {
+                        PostChunks.pollDelayMs(emptyPolls.get().toInt())
+                    }
+                    Thread.sleep(delay)
                 } catch (e: Throwable) {
                     VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
                     alive.set(false)

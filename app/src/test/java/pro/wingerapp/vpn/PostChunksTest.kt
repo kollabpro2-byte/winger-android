@@ -247,4 +247,44 @@ class PostChunksTest {
         assertEquals("smux", mux.getString("protocol"))
         assertEquals("65536", outbound.getJSONObject("transport").getJSONObject("headers").getString("X-Post-Chunk-Bytes"))
     }
+
+    /**
+     * Панель кладёт режим внутрь `extra` (`mode`, `wingerTransport`), а размер
+     * куска — в `scMaxEachPostBytes`. Клиент должен понять оба и не превысить
+     * 256 КБ, даже если сервер разрешает 1 МиБ.
+     */
+    @Test
+    fun serverExtraSetsModeAndClampsChunkSize() {
+        val json = """
+            [
+              { "remarks": "lte5", "outbounds": [
+                { "tag": "proxy", "protocol": "vless",
+                  "settings": { "vnext": [ { "address": "abc.selcdn.net", "port": 443,
+                    "users": [ { "id": "uuid-1" } ] } ] },
+                  "streamSettings": { "network": "xhttp", "security": "tls",
+                    "tlsSettings": { "serverName": "abc.selcdn.net" },
+                    "xhttpSettings": { "path": "/p", "mode": "packet-up",
+                      "extra": { "wingerTransport": "post-chunks", "mode": "post-chunks",
+                        "scMaxEachPostBytes": "1048576", "scMinPostsIntervalMs": "15-50",
+                        "sessionHeader": "X-Session-Id" } } } },
+                { "tag": "direct", "protocol": "freedom" } ] }
+            ]
+        """.trimIndent()
+        val sb = org.json.JSONObject(
+            toSingBox(xrayConfigFor(json, "lte5"), TunnelOptions(shimPort = 45678))
+        )
+        val outbound = sb.getJSONArray("outbounds").getJSONObject(1)
+        assertEquals("127.0.0.1", outbound.getString("server"))
+        val headers = outbound.getJSONObject("transport").getJSONObject("headers")
+        assertEquals((256 * 1024).toString(), headers.getString("X-Post-Chunk-Bytes"))
+        assertEquals("15", headers.getString("X-Post-Pause-Ms"))
+    }
+
+    @Test
+    fun rangeLowerBoundReadsTheLowerEnd() {
+        assertEquals(15L, rangeLowerBound("15-50"))
+        assertEquals(30L, rangeLowerBound(" 30-60 "))
+        assertEquals(100L, rangeLowerBound("100"))
+        assertEquals(null, rangeLowerBound("abc"))
+    }
 }
