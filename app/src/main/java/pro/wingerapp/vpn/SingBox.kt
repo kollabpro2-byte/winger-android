@@ -99,9 +99,27 @@ fun toSingBox(xrayJson: String, opts: TunnelOptions = TunnelOptions()): String {
     }
     sb.put(
         "route",
-        routeSection(opts.directDomains, proxyOutbound.optString("server"), plan?.rules, plan?.ruleSets),
+        routeSection(
+            opts.directDomains,
+            proxyOutbound.optString("server"),
+            plan?.rules,
+            plan?.ruleSets,
+            blockQuic = isPostChunksOutbound(proxyOutbound),
+        ),
     )
     return sb.toString()
+}
+
+/**
+ * Транспорт POST↔POST — только TCP (HTTP POST). Видео у YouTube идёт по QUIC
+ * (UDP/443), и через такой туннель оно просто чернеет: превью грузятся, ролик
+ * не начинается. Поэтому для этого узла QUIC отбиваем — приложение само
+ * переходит на TCP/TLS, как это делают клиенты без поддержки UDP.
+ */
+private fun isPostChunksOutbound(outbound: JSONObject): Boolean {
+    if (outbound.optString("server") != "127.0.0.1") return false
+    val headers = outbound.optJSONObject("transport")?.optJSONObject("headers") ?: return false
+    return headers.has("X-Post-Chunks")
 }
 
 
@@ -116,10 +134,11 @@ private fun routeSection(
     proxyServer: String,
     subRules: JSONArray? = null,
     ruleSets: JSONArray? = null,
+    blockQuic: Boolean = false,
 ): JSONObject {
     val route = JSONObject()
         .put("auto_detect_interface", true)
-        .put("rules", routeRules(directDomains, subRules))
+        .put("rules", routeRules(directDomains, subRules, blockQuic))
     if (ruleSets != null) route.put("rule_set", ruleSets)
     if (!isIpLiteral(proxyServer)) route.put("default_domain_resolver", "bootstrap")
     return route
@@ -209,6 +228,7 @@ private fun firstVless(obs: JSONArray): JSONObject? {
 internal fun routeRules(
     raw: List<String>,
     subRules: JSONArray? = null,
+    blockQuic: Boolean = false,
 ): JSONArray {
     val hosts = raw.mapNotNull { line ->
         val host = line.trim().lowercase()
@@ -231,6 +251,17 @@ internal fun routeRules(
     rules.put(JSONObject().put("action", "sniff"))
     // Перехват DNS нужен один раз и до правил маршрутизации.
     rules.put(JSONObject().put("action", "hijack-dns").put("protocol", "dns"))
+    // Транспорт POST↔POST — только TCP: QUIC (UDP/443) через него не проходит,
+    // и видео YouTube просто не начинается. Отбиваем QUIC, чтобы приложение
+    // перешло на TCP/TLS. DNS уже перехвачен выше, его это не касается.
+    if (blockQuic) {
+        rules.put(
+            JSONObject()
+                .put("network", "udp")
+                .put("port", 443)
+                .put("action", "reject")
+        )
+    }
     // Правила из подписки — в том же порядке, как в Xray. Готовый перехват DNS
     // из них пропускаем: выше уже есть.
     if (subRules != null) {

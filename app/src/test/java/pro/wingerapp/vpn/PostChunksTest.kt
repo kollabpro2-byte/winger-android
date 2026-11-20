@@ -308,4 +308,49 @@ class PostChunksTest {
         assertEquals(100L, rangeLowerBound("100"))
         assertEquals(null, rangeLowerBound("abc"))
     }
+
+    /**
+     * QUIC (UDP/443) через POST-транспорт не проходит: видео YouTube просто не
+     * начинается, а превью грузятся. Для такого узла правило обязано отбивать
+     * QUIC, чтобы приложение перешло на TCP.
+     */
+    @Test
+    fun quicIsRejectedOnlyForThePostChunksNode() {
+        val postNode = """
+            [
+              { "remarks": "lte5", "outbounds": [
+                { "tag": "proxy", "protocol": "vless",
+                  "settings": { "vnext": [ { "address": "abc.selcdn.net", "port": 443,
+                    "users": [ { "id": "uuid-1" } ] } ] },
+                  "streamSettings": { "network": "xhttp", "security": "tls",
+                    "tlsSettings": { "serverName": "abc.selcdn.net" },
+                    "xhttpSettings": { "path": "/p", "mode": "post-chunks" } } },
+                { "tag": "direct", "protocol": "freedom" } ] }
+            ]
+        """.trimIndent()
+        val sb = org.json.JSONObject(
+            toSingBox(xrayConfigFor(postNode, "lte5"), TunnelOptions(shimPort = 45678))
+        )
+        assertTrue(hasQuicReject(sb))
+
+        // Обычный xhttp-узел: правило не добавляется, QUIC работает как раньше.
+        val plainNode = postNode.replace("\"mode\": \"post-chunks\"", "\"mode\": \"packet-up\"")
+        val plain = org.json.JSONObject(
+            toSingBox(xrayConfigFor(plainNode, "lte5"), TunnelOptions(shimPort = 45678))
+        )
+        assertTrue(!hasQuicReject(plain))
+    }
+
+    private fun hasQuicReject(config: org.json.JSONObject): Boolean {
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        for (i in 0 until rules.length()) {
+            val rule = rules.getJSONObject(i)
+            if (rule.optString("network") == "udp" && rule.optInt("port", 0) == 443 &&
+                rule.optString("action") == "reject"
+            ) {
+                return true
+            }
+        }
+        return false
+    }
 }
