@@ -53,7 +53,7 @@ internal object PostChunks {
         val pauseMs: Long = 30,
         val parallel: Int = 2,
         /** Сколько poll'ов держать висящими: с ack и long-poll 400 мс — безопасно 2. */
-        val pollers: Int = 1,
+        val pollers: Int = 2,
     ) {
         init {
             require(chunkBytes in 1024..MAX_BODY) { "chunkBytes вне 1..1 МБ" }
@@ -70,7 +70,7 @@ internal object PostChunks {
                 chunkBytes = (chunkBytes ?: 128 * 1024).coerceIn(16 * 1024, 256 * 1024),
                 pauseMs = (pauseMs ?: 30L).coerceIn(0L, 500L),
                 parallel = (parallel ?: 2).coerceIn(1, 4),
-                pollers = (pollers ?: 1).coerceIn(1, 3),
+                pollers = (pollers ?: 2).coerceIn(1, 3),
             )
         }
     }

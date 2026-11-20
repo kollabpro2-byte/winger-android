@@ -443,6 +443,9 @@ internal class Lte4Shim(
         /** PING раз в секунду, пока сессия жива (спека v2). */
         const val PING_INTERVAL_MS = 1_000L
 
+        /** Как часто писать фактическую скорость вниз в журнал. */
+        const val RATE_LOG_MS = 10_000L
+
         /**
          * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
          * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
@@ -614,32 +617,34 @@ internal class Lte4Shim(
             }
         }
 
-        // Poll = PING: сервер отдаёт накопленное вниз сразу в ответе. Пусто —
-        // пауза растёт 20 → 200 мс; после данных — снова минимум. Висящих poll'ов
-        // может быть больше одного (с ack и long-poll это безопасно): каждый
-        // забирает свой кусок, и даунлинк не ждёт один поток.
+        // Poll = PING и одновременно путь вниз: каждый POST несёт максимум один
+        // кадр. Поэтому после ответа С ДАННЫМИ следующий poll идёт сразу — пауза
+        // между ними напрямую режет скорость. На тишине — короткий backoff:
+        // long-poll 400 мс на сервере уже подождал данные.
         repeat(policy.pollers) { index ->
             thread(isDaemon = true, name = "lte5-poll-$index") {
+                var lastRateAt = System.currentTimeMillis()
+                var lastRecv = 0L
                 while (alive.get() && running) {
                     try {
-                        val startedPoll = System.currentTimeMillis()
                         val before = inFrames.get()
                         deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
                         val gotData = inFrames.get() != before
-                        if (gotData) {
-                            emptyPolls.set(0)
-                        } else {
-                            emptyPolls.incrementAndGet()
+                        if (gotData) emptyPolls.set(0) else emptyPolls.incrementAndGet()
+                        if (!gotData) Thread.sleep(PostChunks.pollDelayMs(emptyPolls.get().toInt()))
+
+                        // Раз в 10 с пишем фактическую скорость вниз: по ней видно,
+                        // помогает ли тюнинг (это же цифра для сравнения режимов).
+                        val now = System.currentTimeMillis()
+                        if (index == 0 && now - lastRateAt >= RATE_LOG_MS) {
+                            val bytes = recvBytes.get()
+                            val kbps = (bytes - lastRecv) * 1000 / (now - lastRateAt) / 1024
+                            if (kbps > 0) {
+                                VpnLog.add("LTE5: ↓$kbps КБ/с (всего ${bytes / 1024} КБ)")
+                            }
+                            lastRateAt = now
+                            lastRecv = bytes
                         }
-                        // Пока идёт обмен — PING раз в секунду; на тишине короткий
-                        // backoff: long-poll на сервере уже подождал данные 400 мс.
-                        val spent = System.currentTimeMillis() - startedPoll
-                        val delay = if (gotData) {
-                            (PING_INTERVAL_MS - spent).coerceAtLeast(0L)
-                        } else {
-                            PostChunks.pollDelayMs(emptyPolls.get().toInt())
-                        }
-                        Thread.sleep(delay)
                     } catch (e: Throwable) {
                         VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
                         alive.set(false)
