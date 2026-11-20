@@ -38,6 +38,17 @@ internal object PostChunks {
      */
     const val DATA_TIMEOUT_MS = 5_000L
 
+    /**
+     * Таймаут POST под размер куска.
+     *
+     * Пять секунд — это 400 кбит/с на кусок 256 КБ. На слабом мобильном аплинке
+     * такой кусок физически не успевает уйти, и каждый таймаут превращался в
+     * повтор того же тела: трафик удваивался, а поток стоял. Добавляем время
+     * из расчёта 64 КБ/с (нижняя разумная планка), остальное добирает RTT.
+     */
+    fun dataTimeoutMs(payloadBytes: Int): Long =
+        DATA_TIMEOUT_MS + (payloadBytes.toLong() * 1000L / (64L * 1024L))
+
     /** Poll: long-poll на сервере 400 мс плюс RTT — 3 с с запасом. */
     const val POLL_TIMEOUT_MS = 3_000L
 
@@ -52,8 +63,12 @@ internal object PostChunks {
         val chunkBytes: Int = 128 * 1024,
         val pauseMs: Long = 30,
         val parallel: Int = 2,
-        /** Сколько poll'ов держать висящими: с ack и long-poll 400 мс — безопасно 2. */
-        val pollers: Int = 2,
+        /**
+         * Сколько poll'ов держать висящими. По умолчанию **1**: каждый poll — это
+         * свой поток, а Telegram открывает десятки соединений сразу (в логе было
+         * 228 потоков и 81 МБ heap). Больше — только через `extra.postPollers`.
+         */
+        val pollers: Int = 1,
     ) {
         init {
             require(chunkBytes in 1024..MAX_BODY) { "chunkBytes вне 1..1 МБ" }

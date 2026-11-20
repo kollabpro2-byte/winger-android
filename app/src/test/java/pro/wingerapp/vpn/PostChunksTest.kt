@@ -353,4 +353,14 @@ class PostChunksTest {
         }
         return false
     }
+
+    @Test
+    fun dataTimeoutGrowsWithChunkSize() {
+        // Мелкий кусок — базовые 5 с, без надбавки за скорость.
+        assertEquals(PostChunks.DATA_TIMEOUT_MS, PostChunks.dataTimeoutMs(0))
+        // 64 КБ — это ровно одна секунда по нижней планке 64 КБ/с.
+        assertEquals(6_000L, PostChunks.dataTimeoutMs(64 * 1024))
+        // Куска 256 КБ должно хватать на 4 с передачи сверх базовых 5 с.
+        assertEquals(9_000L, PostChunks.dataTimeoutMs(256 * 1024))
+    }
 }

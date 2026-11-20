@@ -494,6 +494,9 @@ internal class Lte4Shim(
          */
         const val GAP_TIMEOUT_MS = 15_000L
 
+        /** Как часто проверять застой буфера порядка в POST-режиме. */
+        const val GAP_CHECK_MS = 1_000L
+
         /** Сколько байт должно пройти в соединении, чтобы считать его рабочим. */
         const val RAMP_BYTES = 1_000_000L
     }
@@ -657,10 +660,15 @@ internal class Lte4Shim(
                         deliver(
                             post(
                                 PostChunks.uplinkData(item.first, item.second),
-                                PostChunks.DATA_TIMEOUT_MS,
+                                PostChunks.dataTimeoutMs(item.second.size),
                                 seq = item.first,
                             )
                         )
+                        // Считаем только то, что сервер действительно принял: раньше
+                        // байты прибавлялись при постановке в очередь, и журнал
+                        // показывал «↑4 МБ» даже когда до Xray не дошло ничего.
+                        outFrames.incrementAndGet()
+                        sentBytes.addAndGet(item.second.size.toLong())
                     } catch (e: Throwable) {
                         VpnLog.add("LTE5: аплинк остановлен (${e.javaClass.simpleName})")
                         alive.set(false)
@@ -679,6 +687,7 @@ internal class Lte4Shim(
         repeat(policy.pollers) { index ->
             thread(isDaemon = true, name = "lte5-poll-$index") {
                 var lastRateAt = System.currentTimeMillis()
+                var lastGapCheck = System.currentTimeMillis()
                 var lastRecv = 0L
                 var lastSent = 0L
                 while (alive.get() && running) {
@@ -698,6 +707,23 @@ internal class Lte4Shim(
                         // Раз в 10 с пишем фактическую скорость по обеим сторонам:
                         // по ней видно и эффект тюнинга, и куда смотреть при сбое.
                         val now = System.currentTimeMillis()
+                        if (index == 0 && now - lastGapCheck >= GAP_CHECK_MS) {
+                            lastGapCheck = now
+                            // Потерянный ответ на POST оставляет дырку в нумерации
+                            // даунлинка, и без этой проверки поток висел бы вечно:
+                            // sing-box считает соединение живым, а данных нет.
+                            if (reorder.overflowed || reorder.isStalled(now, GAP_TIMEOUT_MS)) {
+                                val why = if (reorder.overflowed) {
+                                    "переполнение буфера (${reorder.maxDepth} кадров)"
+                                } else {
+                                    "дырка в нумерации дольше ${GAP_TIMEOUT_MS / 1000} с"
+                                }
+                                VpnLog.add("LTE5: пересоздаю поток — $why")
+                                alive.set(false)
+                                runCatching { local.close() }
+                                break
+                            }
+                        }
                         if (index == 0 && now - lastRateAt >= RATE_LOG_MS) {
                             val down = recvBytes.get()
                             val up = sentBytes.get()
@@ -732,12 +758,15 @@ internal class Lte4Shim(
                 val message = readClientMessage(input, output) ?: break
                 val limit = chunkBytes.get()
                 for (part in PostChunks.split(message, PostChunks.Policy(limit, policy.pauseMs, policy.parallel))) {
-                    // Очередь полна — притормаживаем чтение, чтобы не копить память.
-                    while (alive.get() && running && !queue.offer(upSeq.getAndIncrement() to part, 200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                        Unit
-                    }
-                    outFrames.incrementAndGet()
-                    sentBytes.addAndGet(part.size.toLong())
+                    // Номер куска выдаётся однократно — см. `enqueueUplinkPart`:
+                    // повторные попытки положить кусок в полную очередь не должны
+                    // сжигать seq, иначе в аплинке появляется дыра и релей замолкает.
+                    enqueueUplinkPart(
+                        nextSeq = upSeq,
+                        part = part,
+                        canContinue = { alive.get() && running },
+                        offer = { queue.offer(it, 200, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                    )
                     if (policy.pauseMs > 0) Thread.sleep(policy.pauseMs)
                 }
             }
@@ -751,10 +780,12 @@ internal class Lte4Shim(
             // Сессия, которая не пронесла полезных байт, — это почти всегда отказ
             // VLESS на той стороне. Клиент сверху (браузер) переподключается
             // мгновенно, и без паузы выходит шторм: в логе видели 94 потока.
-            val useless = inFrames.get() == 0L || sentBytes.get() < 2_000L
+            val useless = inFrames.get() == 0L && sentBytes.get() < 2_000L
             if (useless) postFailStreak.incrementAndGet() else postFailStreak.set(0)
-            if (postFailStreak.get() >= 2) {
-                val delay = (300L * (postFailStreak.get() - 1)).coerceAtMost(2_000L)
+            if (postFailStreak.get() >= 3) {
+                // Тормозим только настоящие пустышки: раньше условие «или» считало
+                // пустой сессией и ту, где вниз пришёл ответ, и вешало 2 с на каждую.
+                val delay = (300L * (postFailStreak.get() - 2)).coerceAtMost(1_000L)
                 VpnLog.add("LTE5: пустых сессий подряд ${postFailStreak.get()} — пауза $delay мс")
                 runCatching { Thread.sleep(delay) }
             }
@@ -1077,3 +1108,30 @@ internal class Lte4Shim(
     }
 
 }
+
+/**
+ * Кладёт кусок в очередь аплинка, выдав ему номер **однократно**.
+ *
+ * Номер нельзя брать внутри цикла ожидания свободного места: `offer` возвращает
+ * `false`, пока очередь полна, и каждый такой отказ сжигал бы номер. Дыра в
+ * нумерации хуже потери куска — релей собирает аплинк строго по `seq`, держит
+ * всё после дырки в буфере и не отдаёт Xray, а тот закрывает соединение по
+ * своему таймауту. Симптом ровно такой: вверх уходят мегабайты, вниз приходит
+ * один кадр ответа и `CLOSE`. Регрессия закрыта тестом `UplinkQueueTest`.
+ *
+ * @param nextSeq общий счётчик номеров сессии
+ * @param canContinue жив ли поток; пока `false` — дальше класть некуда
+ * @param offer одна попытка положить кусок в очередь, `false` — места нет
+ */
+internal fun enqueueUplinkPart(
+    nextSeq: java.util.concurrent.atomic.AtomicLong,
+    part: ByteArray,
+    canContinue: () -> Boolean,
+    offer: (Pair<Long, ByteArray>) -> Boolean,
+) {
+    val item = nextSeq.getAndIncrement() to part
+    while (canContinue() && !offer(item)) {
+        // Очередь ограничена, поэтому ждём здесь, а не копим куски в памяти.
+    }
+}
+
