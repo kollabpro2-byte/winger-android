@@ -218,11 +218,10 @@ class PostChunksTest {
 
     /**
      * Сервер помечает узел `mode: "post-chunks"` — так включает режим подписка.
-     * Мультиплексирование обязательно: иначе браузер откроет десятки сессий
-     * при лимите релея 128 на весь сервер.
+     * Mux по умолчанию выключен: `smux` sing-box несовместим с Xray за релеем.
      */
     @Test
-    fun postChunksModeGoesThroughTheShimWithMux() {
+    fun postChunksModeGoesThroughTheShimWithoutMuxByDefault() {
         val json = """
             [
               { "remarks": "lte5", "outbounds": [
@@ -242,10 +241,32 @@ class PostChunksTest {
         val outbound = sb.getJSONArray("outbounds").getJSONObject(1)
         assertEquals("127.0.0.1", outbound.getString("server"))
         assertTrue(outbound.opt("tls") == null)
-        val mux = outbound.getJSONObject("multiplex")
-        assertTrue(mux.getBoolean("enabled"))
-        assertEquals("smux", mux.getString("protocol"))
+        assertTrue(outbound.opt("multiplex") == null)
         assertEquals("65536", outbound.getJSONObject("transport").getJSONObject("headers").getString("X-Post-Chunk-Bytes"))
+    }
+
+    /** `extra.postMux = "h2mux"` — совместимо с Xray mux.cool: меньше сессий. */
+    @Test
+    fun postMuxFromSubscriptionEnablesH2Mux() {
+        val json = """
+            [
+              { "remarks": "lte5", "outbounds": [
+                { "tag": "proxy", "protocol": "vless",
+                  "settings": { "vnext": [ { "address": "abc.selcdn.net", "port": 443,
+                    "users": [ { "id": "uuid-1" } ] } ] },
+                  "streamSettings": { "network": "xhttp", "security": "tls",
+                    "tlsSettings": { "serverName": "abc.selcdn.net" },
+                    "xhttpSettings": { "path": "/p", "mode": "post-chunks",
+                      "extra": { "postMux": "h2mux" } } } },
+                { "tag": "direct", "protocol": "freedom" } ] }
+            ]
+        """.trimIndent()
+        val sb = org.json.JSONObject(
+            toSingBox(xrayConfigFor(json, "lte5"), TunnelOptions(shimPort = 45678))
+        )
+        val mux = sb.getJSONArray("outbounds").getJSONObject(1).getJSONObject("multiplex")
+        assertTrue(mux.getBoolean("enabled"))
+        assertEquals("h2mux", mux.getString("protocol"))
     }
 
     /**

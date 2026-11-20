@@ -404,10 +404,13 @@ private fun convertVlessBody(
             sb.put("server", "127.0.0.1")
             sb.put("server_port", shimPort)
         }
-        // Одна сессия транспорта — одно VLESS-соединение, а браузер открывает
-        // десятки. Мультиплексирование сводит их в одну-две сессии: у релея
-        // лимит 128 сессий на весь сервер.
-        sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", "smux"))
+        // Mux по умолчанию ВЫКЛЮЧЕН: sing-box `smux` несовместим с Xray, а сервер
+        // за релеем — Xray. Включается из подписки: `extra.postMux` = "h2mux"
+        // (совместим с Xray mux.cool) или "smux" (только для sing-box-серверов).
+        val muxProtocol = xhttpExtra?.opt("postMux")?.toString()?.trim()?.lowercase().orEmpty()
+        if (muxProtocol == "h2mux" || muxProtocol == "smux") {
+            sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", muxProtocol))
+        }
         return sb
     }
     // For WebSocket the Host header must be the domain (SNI), not the resolved IP:

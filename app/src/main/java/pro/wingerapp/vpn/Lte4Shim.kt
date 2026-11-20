@@ -83,6 +83,13 @@ internal class Lte4Shim(
     /** Отказы по потолку соединений: логируем редко, иначе шторм забьёт журнал. */
     private val refusals = AtomicInteger(0)
 
+    /**
+     * Сколько сессий POST-chunks подряд закрылись, не пронеся полезных байт.
+     * Так выглядит отказ VLESS на той стороне: клиент сверху переподключается
+     * мгновенно, и без паузы получается шторм в десятки потоков.
+     */
+    private val postFailStreak = AtomicInteger(0)
+
     /** Сколько раз подряд кадровое соединение не поднялось (таймаут или ошибка). */
     private val framedFails = AtomicInteger(0)
 
@@ -664,6 +671,16 @@ internal class Lte4Shim(
         } finally {
             alive.set(false)
             synchronized(gate) { runCatching { session.close() } }
+            // Сессия, которая не пронесла полезных байт, — это почти всегда отказ
+            // VLESS на той стороне. Клиент сверху (браузер) переподключается
+            // мгновенно, и без паузы выходит шторм: в логе видели 94 потока.
+            val useless = inFrames.get() == 0L || sentBytes.get() < 2_000L
+            if (useless) postFailStreak.incrementAndGet() else postFailStreak.set(0)
+            if (postFailStreak.get() >= 2) {
+                val delay = (300L * (postFailStreak.get() - 1)).coerceAtMost(2_000L)
+                VpnLog.add("LTE5: пустых сессий подряд ${postFailStreak.get()} — пауза $delay мс")
+                runCatching { Thread.sleep(delay) }
+            }
             val ms = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
             VpnLog.add(
                 "LTE5: закрыто за $ms мс, ↑${outFrames.get()}/${sentBytes.get()} б, " +
