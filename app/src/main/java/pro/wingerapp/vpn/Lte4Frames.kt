@@ -7,18 +7,23 @@ import java.nio.ByteBuffer
  *
  * ```
  * байт 0      версия 0x01
- * байт 1      тип: 0x00 DATA, 0x01 PING
+ * байт 1      тип: 0x00 DATA, 0x01 PING, 0x02 CLOSE
  * байты 2..5  seq, uint32 big-endian (с 0, +1 на каждый DATA в соединении)
  * дальше      payload (только у DATA)
  * ```
  *
  * Шлюз Яндекса пересылает сообщения параллельно и вразнобой, поэтому порядок
  * восстанавливает принимающая сторона по seq — см. [ReorderBuffer].
+ *
+ * CLOSE (0x02) — конец VLESS-соединения: сервер шлёт его, когда Xray закрыл
+ * поток, клиент — когда закрывает свою сторону. Без него конец соединения
+ * виден только по таймауту.
  */
 internal object Lte4 {
     const val VERSION: Int = 0x01
     const val TYPE_DATA: Int = 0x00
     const val TYPE_PING: Int = 0x01
+    const val TYPE_CLOSE: Int = 0x02
 
     /**
      * Предел payload одного DATA. У шлюза два ограничения: сообщение до 128 КБ и
@@ -46,7 +51,7 @@ internal object Lte4 {
         if (bytes.size < HEADER) return null
         if (bytes[0].toInt() and 0xFF != VERSION) return null
         val type = bytes[1].toInt() and 0xFF
-        if (type != TYPE_DATA && type != TYPE_PING) return null
+        if (type != TYPE_DATA && type != TYPE_PING && type != TYPE_CLOSE) return null
         val seq = ByteBuffer.wrap(bytes, 2, 4).int.toLong() and 0xFFFFFFFFL
         val payload = if (bytes.size > HEADER) bytes.copyOfRange(HEADER, bytes.size) else ByteArray(0)
         return Frame(type, seq, payload)
@@ -325,6 +330,29 @@ internal class ReorderBuffer(
     fun isStalled(nowMs: Long, timeoutMs: Long): Boolean {
         if (gapSince == 0L || pending.isEmpty()) return false
         return nowMs - gapSince >= timeoutMs
+    }
+
+    /**
+     * Последний непрерывно выданный seq; -1, если ещё ничего не выдано.
+     * Это значение клиент шлёт серверу в `X-Ack`: всё до него сервер может
+     * забыть, всё после — обязан держать и повторить.
+     */
+    @Synchronized
+    fun lastDelivered(): Long = nextSeq - 1
+
+    /**
+     * Новая сессия: нумерация начинается заново и буфер пуст. Нужно после
+     * `410 Gone` — сервер открыл новую сессию, и её seq идут с нуля.
+     */
+    @Synchronized
+    fun reset() {
+        pending.clear()
+        arrivedAt.clear()
+        pendingBytes = 0L
+        nextSeq = 0L
+        gapSince = 0L
+        lastWaitMs = 0L
+        maxWaitMs = 0L
     }
 
     /** Кладёт кадр и возвращает всё, что теперь можно отдать по порядку. */

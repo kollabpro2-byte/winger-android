@@ -349,14 +349,22 @@ private fun convertVlessBody(
         return sb
     }
     // LTE 5: Selectel CDN буферизует длинный GET, поэтому xhttp там висит. Если
-    // подписка помечает узел `extra.postChunks`, ядро ходит в прослойку, а она
-    // обменивается с CDN короткими POST в обе стороны.
+    // подписка помечает узел `mode: "post-chunks"` (или `extra.postChunks`), ядро
+    // ходит в прослойку, а она обменивается с CDN короткими POST в обе стороны.
     val xhttpSettings = stream.optJSONObject("xhttpSettings")
     val xhttpExtra = xhttpSettings?.optJSONObject("extra")
+    val extraValues = HashMap<String, Any?>()
+    if (xhttpExtra != null) {
+        val keys = xhttpExtra.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            extraValues[key] = xhttpExtra.opt(key)
+        }
+    }
     val viaPostChunks = shimPort > 0 &&
         network in setOf("xhttp", "splithttp") &&
         PostChunkParams.isPostChunksHost(address) &&
-        xhttpExtra?.optBoolean("postChunks", false) == true
+        PostChunkParams.isPostChunksMode(xhttpSettings?.optString("mode").orEmpty(), extraValues)
     if (viaPostChunks) {
         val t = JSONObject().put("type", "ws")
         xhttpSettings?.optString("path")?.takeIf { it.isNotBlank() }?.let { t.put("path", it) }
@@ -378,6 +386,10 @@ private fun convertVlessBody(
             sb.put("server", "127.0.0.1")
             sb.put("server_port", shimPort)
         }
+        // Одна сессия транспорта — одно VLESS-соединение, а браузер открывает
+        // десятки. Мультиплексирование сводит их в одну-две сессии: у релея
+        // лимит 128 сессий на весь сервер.
+        sb.put("multiplex", JSONObject().put("enabled", true).put("protocol", "smux"))
         return sb
     }
     // For WebSocket the Host header must be the domain (SNI), not the resolved IP:

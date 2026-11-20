@@ -213,5 +213,38 @@ class PostChunksTest {
         val outbound = sb.getJSONArray("outbounds").getJSONObject(1)
         assertTrue(outbound.getString("server") != "127.0.0.1")
         assertEquals("xhttp", outbound.getJSONObject("transport").getString("type"))
+        assertTrue(outbound.opt("multiplex") == null)
+    }
+
+    /**
+     * Сервер помечает узел `mode: "post-chunks"` — так включает режим подписка.
+     * Мультиплексирование обязательно: иначе браузер откроет десятки сессий
+     * при лимите релея 128 на весь сервер.
+     */
+    @Test
+    fun postChunksModeGoesThroughTheShimWithMux() {
+        val json = """
+            [
+              { "remarks": "lte5", "outbounds": [
+                { "tag": "proxy", "protocol": "vless",
+                  "settings": { "vnext": [ { "address": "abc.selcdn.net", "port": 443,
+                    "users": [ { "id": "uuid-1" } ] } ] },
+                  "streamSettings": { "network": "xhttp", "security": "tls",
+                    "tlsSettings": { "serverName": "abc.selcdn.net" },
+                    "xhttpSettings": { "path": "/p", "mode": "post-chunks",
+                      "extra": { "postChunkBytes": 65536, "postParallel": 2 } } } },
+                { "tag": "direct", "protocol": "freedom" } ] }
+            ]
+        """.trimIndent()
+        val sb = org.json.JSONObject(
+            toSingBox(xrayConfigFor(json, "lte5"), TunnelOptions(shimPort = 45678))
+        )
+        val outbound = sb.getJSONArray("outbounds").getJSONObject(1)
+        assertEquals("127.0.0.1", outbound.getString("server"))
+        assertTrue(outbound.opt("tls") == null)
+        val mux = outbound.getJSONObject("multiplex")
+        assertTrue(mux.getBoolean("enabled"))
+        assertEquals("smux", mux.getString("protocol"))
+        assertEquals("65536", outbound.getJSONObject("transport").getJSONObject("headers").getString("X-Post-Chunk-Bytes"))
     }
 }

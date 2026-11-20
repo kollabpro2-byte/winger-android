@@ -430,6 +430,9 @@ internal class Lte4Shim(
         /** Пустое WS-сообщение: им выталкиваем хвост пачки из шлюза. */
         val EMPTY = ByteArray(0)
 
+        /** Нижняя граница куска POST: мельче — слишком много запросов. */
+        const val MIN_POST_CHUNK = 16 * 1024
+
         /**
          * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
          * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
@@ -491,67 +494,128 @@ internal class Lte4Shim(
         val padding = PostChunkParams.padding(hs.headers)
         val startedAt = System.currentTimeMillis()
         val reorder = ReorderBuffer()
-        val seq = AtomicLong(0)
+        val upSeq = AtomicLong(0)
         val alive = java.util.concurrent.atomic.AtomicBoolean(true)
         val outFrames = AtomicLong(0)
         val inFrames = AtomicLong(0)
         val sentBytes = AtomicLong(0)
         val recvBytes = AtomicLong(0)
         val emptyPolls = AtomicLong(0)
+        val queue = java.util.concurrent.LinkedBlockingQueue<Pair<Long, ByteArray>>(policy.parallel * 4)
         val gate = Any()
+        // Кусок может уменьшиться по 413 — храним в атомике, чтобы видели все потоки.
+        val chunkBytes = java.util.concurrent.atomic.AtomicInteger(policy.chunkBytes)
         var session = PostChunkClient(url, padding, protect)
 
         VpnLog.add(
-            "LTE5: POST-chunks к $url, кусок ${policy.chunkBytes / 1024} КБ, " +
-                "пауза ${policy.pauseMs} мс, паддинг $padding"
+            "LTE5: POST-chunks к $url, кусок ${chunkBytes.get() / 1024} КБ, пауза ${policy.pauseMs} мс, " +
+                "POST в полёте ${policy.parallel}, паддинг $padding"
         )
+
+        /** Подтверждение даунлинка: всё до этого seq сервер может забыть. */
+        fun ack(): Long = reorder.lastDelivered()
 
         fun deliver(frames: List<Lte4.Frame>) {
             if (frames.isEmpty()) return
+            var gotData = false
             synchronized(reorder) {
                 for (frame in frames) {
-                    if (frame.type == Lte4.TYPE_PING) continue
-                    inFrames.incrementAndGet()
-                    recvBytes.addAndGet(frame.payload.size.toLong())
-                    for (payload in reorder.put(frame.seq, frame.payload)) {
-                        var offset = 0
-                        while (offset < payload.size) {
-                            val size = minOf(Lte4.MAX_CHUNK, payload.size - offset)
-                            writeFrame(output, 0x2, payload.copyOfRange(offset, offset + size))
-                            offset += size
+                    when (frame.type) {
+                        Lte4.TYPE_CLOSE -> {
+                            // Сервер закрыл VLESS-поток: закрываем локальную сторону,
+                            // иначе конец соединения виден только по таймауту.
+                            VpnLog.add("LTE5: сервер закрыл поток (CLOSE)")
+                            alive.set(false)
+                            runCatching { local.close() }
                         }
+                        Lte4.TYPE_PING -> Unit
+                        else -> {
+                            gotData = true
+                            inFrames.incrementAndGet()
+                            recvBytes.addAndGet(frame.payload.size.toLong())
+                            for (payload in reorder.put(frame.seq, frame.payload)) {
+                                var offset = 0
+                                while (offset < payload.size) {
+                                    val size = minOf(Lte4.MAX_CHUNK, payload.size - offset)
+                                    writeFrame(output, 0x2, payload.copyOfRange(offset, offset + size))
+                                    offset += size
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (gotData) emptyPolls.set(0)
+        }
+
+        /**
+         * Один POST с данными. `503` ждём по `Retry-After`, `413` уменьшает кусок,
+         * сетевую ошибку повторяем один раз. `410` и прочее — наверх, там рвём
+         * соединение: sing-box переподключится и начнёт новую сессию с seq 0.
+         */
+        fun post(body: ByteArray, timeoutMs: Long): List<Lte4.Frame> {
+            var attempt = 0
+            while (true) {
+                attempt += 1
+                val client = synchronized(gate) { session }
+                try {
+                    return client.exchange(body, ack(), timeoutMs)
+                } catch (e: PostChunkHttpException) {
+                    when (e.code) {
+                        503 -> {
+                            val wait = (e.retryAfterMs ?: 1_000L).coerceAtLeast(100L)
+                            VpnLog.add("LTE5: сервер занят (503) — жду $wait мс")
+                            Thread.sleep(wait)
+                            if (attempt >= 3) throw e
+                        }
+                        413 -> {
+                            val reduced = (chunkBytes.get() / 2).coerceAtLeast(MIN_POST_CHUNK)
+                            chunkBytes.set(reduced)
+                            VpnLog.add("LTE5: 413 — уменьшаю кусок до ${reduced / 1024} КБ")
+                            throw e
+                        }
+                        else -> throw e
+                    }
+                } catch (e: java.io.IOException) {
+                    if (attempt >= 2) throw e
+                    runCatching { Thread.sleep(200) }
+                }
+            }
+        }
+        // Аплинк: N воркеров разбирают очередь. seq назначается в порядке потока,
+        // поэтому сервер соберёт куски правильно даже при параллельных POST.
+        repeat(policy.parallel) { index ->
+            thread(isDaemon = true, name = "lte5-up-$index") {
+                while (alive.get() && running) {
+                    val item = try {
+                        queue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        break
+                    } ?: continue
+                    try {
+                        deliver(post(PostChunks.uplinkData(item.first, item.second), PostChunks.DATA_TIMEOUT_MS))
+                    } catch (e: Throwable) {
+                        VpnLog.add("LTE5: аплинк остановлен (${e.javaClass.simpleName})")
+                        alive.set(false)
+                        runCatching { local.close() }
+                        break
                     }
                 }
             }
         }
 
-        /** Один обмен; на сетевой ошибке — новая сессия и одна повторная попытка. */
-        fun exchange(body: ByteArray): List<Lte4.Frame> = synchronized(gate) {
-            try {
-                session.exchange(body)
-            } catch (first: Throwable) {
-                VpnLog.add("LTE5: обмен не удался (${first.javaClass.simpleName}) — новая сессия")
-                runCatching { session.close() }
-                runCatching { Thread.sleep(250) }
-                session = PostChunkClient(url, padding, protect)
-                session.exchange(body)
-            }
-        }
-
-        // PING и заодно даунлинк: каждый poll забирает то, что накопилось внизу.
+        // Poll = PING: сервер отдаёт накопленное вниз сразу в ответе. Пусто —
+        // пауза растёт 20 → 200 мс; после данных — снова минимум.
         thread(isDaemon = true, name = "lte5-poll") {
             while (alive.get() && running) {
                 try {
-                    val frames = exchange(PostChunks.uplinkPing())
-                    if (frames.isEmpty()) {
-                        emptyPolls.incrementAndGet()
-                    } else {
-                        emptyPolls.set(0)
-                        deliver(frames)
-                    }
+                    val before = inFrames.get()
+                    deliver(post(PostChunks.uplinkPing(), PostChunks.POLL_TIMEOUT_MS))
+                    // Данные пришли — пауза минимальная; тишина — растёт до 200 мс.
+                    if (inFrames.get() == before) emptyPolls.incrementAndGet() else emptyPolls.set(0)
                     Thread.sleep(PostChunks.pollDelayMs(emptyPolls.get().toInt()))
                 } catch (e: Throwable) {
-                    VpnLog.add("LTE5: сессия закрыта (${e.javaClass.simpleName})")
+                    VpnLog.add("LTE5: poll остановлен (${e.javaClass.simpleName})")
                     alive.set(false)
                     runCatching { local.close() }
                     break
@@ -562,17 +626,19 @@ internal class Lte4Shim(
         try {
             read@ while (alive.get() && running) {
                 val message = readClientMessage(input, output) ?: break
-                for (part in PostChunks.split(message, policy)) {
-                    val frames = exchange(PostChunks.uplinkData(seq.getAndIncrement(), part))
+                val limit = chunkBytes.get()
+                for (part in PostChunks.split(message, PostChunks.Policy(limit, policy.pauseMs, policy.parallel))) {
+                    // Очередь полна — притормаживаем чтение, чтобы не копить память.
+                    while (alive.get() && running && !queue.offer(upSeq.getAndIncrement() to part, 200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        Unit
+                    }
                     outFrames.incrementAndGet()
                     sentBytes.addAndGet(part.size.toLong())
-                    if (frames.isNotEmpty()) {
-                        emptyPolls.set(0)
-                        deliver(frames)
-                    }
                     if (policy.pauseMs > 0) Thread.sleep(policy.pauseMs)
                 }
             }
+            // Клиент закрыл поток — сообщаем серверу, чтобы тот закрыл сессию.
+            runCatching { post(PostChunks.uplinkClose(), PostChunks.POLL_TIMEOUT_MS) }
         } catch (_: Throwable) {
             // Обрыв любой стороны — закрываем обе.
         } finally {
@@ -585,7 +651,6 @@ internal class Lte4Shim(
             )
         }
     }
-
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
         val startedAt = System.currentTimeMillis()
         // Кадровый режим включается параметром в path: /ws?f=1c32. Если кадры
