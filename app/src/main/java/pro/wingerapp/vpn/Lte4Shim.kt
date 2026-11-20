@@ -246,14 +246,21 @@ internal class Lte4Shim(
                 local.close(); return
             }
             val gateway = request.host
-            if (!Lte4.isLte4Gateway(gateway)) {
-                VpnLog.add("LTE4 shim: отказ, хост не шлюз Яндекса")
+            val isGateway = Lte4.isLte4Gateway(gateway)
+            val isPostChunks = PostChunkParams.isPostChunksHost(gateway) &&
+                PostChunkParams.isEnabled(request.headers)
+            if (!isGateway && !isPostChunks) {
+                VpnLog.add("LTE4 shim: отказ, хост не шлюз Яндекса и не POST-chunks")
                 local.close(); return
             }
             if (!writeHandshake(output, request.key)) {
                 local.close(); return
             }
-            pumpBoth(local, input, output, request)
+            if (isPostChunks) {
+                pumpPosts(local, input, output, request)
+            } else {
+                pumpBoth(local, input, output, request)
+            }
         } catch (e: Throwable) {
             VpnLog.add("LTE4 shim: соединение закрыто (${e.javaClass.simpleName})")
         } finally {
@@ -263,7 +270,12 @@ internal class Lte4Shim(
         }
     }
 
-    private data class Handshake(val path: String, val host: String, val key: String)
+    private data class Handshake(
+        val path: String,
+        val host: String,
+        val key: String,
+        val headers: Map<String, String> = emptyMap(),
+    )
 
     /** Состояние одного туннеля: открыт ли, какой следующий seq, когда были данные. */
     internal class ConnState {
@@ -301,18 +313,20 @@ internal class Lte4Shim(
         val path = requestLine[1]
         var host = ""
         var key = ""
+        val headers = HashMap<String, String>()
         for (line in lines.drop(1)) {
             val idx = line.indexOf(':')
             if (idx <= 0) continue
             val name = line.substring(0, idx).trim().lowercase()
             val value = line.substring(idx + 1).trim()
+            if (name.isNotEmpty()) headers[name] = value
             when (name) {
                 "host" -> host = value.substringBefore(':')
                 "sec-websocket-key" -> key = value
             }
         }
         if (host.isBlank() || key.isBlank()) return null
-        return Handshake(path, host, key)
+        return Handshake(path, host, key, headers)
     }
 
     private fun writeHandshake(out: OutputStream, key: String): Boolean = try {
@@ -460,6 +474,118 @@ internal class Lte4Shim(
      * Режим определяет только то, что уходит и что разбирается: в «флаше» и
      * «выкл» поток байт не меняется, в «кадрах» добавляется заголовок и порядок.
      */
+    /**
+     * Транспорт «POST↔POST chunks» (LTE 5, Selectel CDN).
+     *
+     * В обе стороны — только завершённые короткие POST: Selectel буферизует
+     * длинный GET и рвёт большие ответы, поэтому обычный xhttp там висит.
+     *
+     * Аплинк: кусок потока → кадр DATA → POST. Даунлинк: читаем ответ на каждый
+     * POST и отдельные PING-poll'ы; всё, что пришло, проходит через буфер
+     * порядка (сервер вправе ответить не по порядку). Пустой ответ — «данных
+     * нет», пауза растёт 20 → 50 → 100 → 200 мс.
+     */
+    private fun pumpPosts(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
+        val url = "https://" + hs.host + hs.path
+        val policy = PostChunkParams.policy(hs.headers)
+        val padding = PostChunkParams.padding(hs.headers)
+        val startedAt = System.currentTimeMillis()
+        val reorder = ReorderBuffer()
+        val seq = AtomicLong(0)
+        val alive = java.util.concurrent.atomic.AtomicBoolean(true)
+        val outFrames = AtomicLong(0)
+        val inFrames = AtomicLong(0)
+        val sentBytes = AtomicLong(0)
+        val recvBytes = AtomicLong(0)
+        val emptyPolls = AtomicLong(0)
+        val gate = Any()
+        var session = PostChunkClient(url, padding, protect)
+
+        VpnLog.add(
+            "LTE5: POST-chunks к $url, кусок ${policy.chunkBytes / 1024} КБ, " +
+                "пауза ${policy.pauseMs} мс, паддинг $padding"
+        )
+
+        fun deliver(frames: List<Lte4.Frame>) {
+            if (frames.isEmpty()) return
+            synchronized(reorder) {
+                for (frame in frames) {
+                    if (frame.type == Lte4.TYPE_PING) continue
+                    inFrames.incrementAndGet()
+                    recvBytes.addAndGet(frame.payload.size.toLong())
+                    for (payload in reorder.put(frame.seq, frame.payload)) {
+                        var offset = 0
+                        while (offset < payload.size) {
+                            val size = minOf(Lte4.MAX_CHUNK, payload.size - offset)
+                            writeFrame(output, 0x2, payload.copyOfRange(offset, offset + size))
+                            offset += size
+                        }
+                    }
+                }
+            }
+        }
+
+        /** Один обмен; на сетевой ошибке — новая сессия и одна повторная попытка. */
+        fun exchange(body: ByteArray): List<Lte4.Frame> = synchronized(gate) {
+            try {
+                session.exchange(body)
+            } catch (first: Throwable) {
+                VpnLog.add("LTE5: обмен не удался (${first.javaClass.simpleName}) — новая сессия")
+                runCatching { session.close() }
+                runCatching { Thread.sleep(250) }
+                session = PostChunkClient(url, padding, protect)
+                session.exchange(body)
+            }
+        }
+
+        // PING и заодно даунлинк: каждый poll забирает то, что накопилось внизу.
+        thread(isDaemon = true, name = "lte5-poll") {
+            while (alive.get() && running) {
+                try {
+                    val frames = exchange(PostChunks.uplinkPing())
+                    if (frames.isEmpty()) {
+                        emptyPolls.incrementAndGet()
+                    } else {
+                        emptyPolls.set(0)
+                        deliver(frames)
+                    }
+                    Thread.sleep(PostChunks.pollDelayMs(emptyPolls.get().toInt()))
+                } catch (e: Throwable) {
+                    VpnLog.add("LTE5: сессия закрыта (${e.javaClass.simpleName})")
+                    alive.set(false)
+                    runCatching { local.close() }
+                    break
+                }
+            }
+        }
+
+        try {
+            read@ while (alive.get() && running) {
+                val message = readClientMessage(input, output) ?: break
+                for (part in PostChunks.split(message, policy)) {
+                    val frames = exchange(PostChunks.uplinkData(seq.getAndIncrement(), part))
+                    outFrames.incrementAndGet()
+                    sentBytes.addAndGet(part.size.toLong())
+                    if (frames.isNotEmpty()) {
+                        emptyPolls.set(0)
+                        deliver(frames)
+                    }
+                    if (policy.pauseMs > 0) Thread.sleep(policy.pauseMs)
+                }
+            }
+        } catch (_: Throwable) {
+            // Обрыв любой стороны — закрываем обе.
+        } finally {
+            alive.set(false)
+            synchronized(gate) { runCatching { session.close() } }
+            val ms = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+            VpnLog.add(
+                "LTE5: закрыто за $ms мс, ↑${outFrames.get()}/${sentBytes.get()} б, " +
+                    "↓${inFrames.get()}/${recvBytes.get()} б, пустых poll ${emptyPolls.get()}"
+            )
+        }
+    }
+
     private fun pumpBoth(local: Socket, input: InputStream, output: OutputStream, hs: Handshake) {
         val startedAt = System.currentTimeMillis()
         // Кадровый режим включается параметром в path: /ws?f=1c32. Если кадры

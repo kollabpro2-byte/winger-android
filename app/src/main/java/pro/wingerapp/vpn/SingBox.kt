@@ -348,6 +348,38 @@ private fun convertVlessBody(
         sb.put("transport", t)
         return sb
     }
+    // LTE 5: Selectel CDN буферизует длинный GET, поэтому xhttp там висит. Если
+    // подписка помечает узел `extra.postChunks`, ядро ходит в прослойку, а она
+    // обменивается с CDN короткими POST в обе стороны.
+    val xhttpSettings = stream.optJSONObject("xhttpSettings")
+    val xhttpExtra = xhttpSettings?.optJSONObject("extra")
+    val viaPostChunks = shimPort > 0 &&
+        network in setOf("xhttp", "splithttp") &&
+        PostChunkParams.isPostChunksHost(address) &&
+        xhttpExtra?.optBoolean("postChunks", false) == true
+    if (viaPostChunks) {
+        val t = JSONObject().put("type", "ws")
+        xhttpSettings?.optString("path")?.takeIf { it.isNotBlank() }?.let { t.put("path", it) }
+        val headers = JSONObject()
+            .put("Host", address)
+            .put("X-Post-Chunks", "1")
+        xhttpExtra?.optInt("postChunkBytes", 0)?.takeIf { it > 0 }
+            ?.let { headers.put("X-Post-Chunk-Bytes", it.toString()) }
+        xhttpExtra?.optInt("postPauseMs", 0)?.takeIf { it > 0 }
+            ?.let { headers.put("X-Post-Pause-Ms", it.toString()) }
+        xhttpExtra?.optInt("postParallel", 0)?.takeIf { it > 0 }
+            ?.let { headers.put("X-Post-Parallel", it.toString()) }
+        if (xhttpExtra?.optBoolean("postPadding", true) == false) {
+            headers.put("X-Padding", "0")
+        }
+        t.put("headers", headers)
+        sb.put("transport", t)
+        if (shimPort > 0) {
+            sb.put("server", "127.0.0.1")
+            sb.put("server_port", shimPort)
+        }
+        return sb
+    }
     // For WebSocket the Host header must be the domain (SNI), not the resolved IP:
     // gateways route by Host, and our `server` field is already an IP.
     val hostForWs = stream.optJSONObject("tlsSettings")?.optString("serverName").orEmpty()
