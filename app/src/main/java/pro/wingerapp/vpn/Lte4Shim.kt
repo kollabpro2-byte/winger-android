@@ -454,6 +454,13 @@ internal class Lte4Shim(
         const val POLL_FLOOR_MS = 30L
 
         /**
+         * Сколько раз повторять POST с данными при 502/503/504/499 и таймауте.
+         * Повтор идёт с тем же seq, сервер дубли отбрасывает, поэтому безопасно:
+         * без этого потерянный на крае кусок блокирует весь поток за собой.
+         */
+        const val MAX_DATA_ATTEMPTS = 5
+
+        /**
          * Пауза между кадрами. По замерам релея: если слать сообщения вплотную,
          * шлюз склеивает пачку и держит всё, кроме первого, ~1,5 с — кадры
          * становились медленнее обычного режима. С паузой ≥5 мс склейки нет.
@@ -497,6 +504,14 @@ internal class Lte4Shim(
      * Режим определяет только то, что уходит и что разбирается: в «флаше» и
      * «выкл» поток байт не меняется, в «кадрах» добавляется заголовок и порядок.
      */
+    /**
+     * Паузы повторов одного POST: 250 → 500 → 1000 → 2000 мс, дальше потолок.
+     * Край открывает новое TLS-соединение на каждый POST, и при загрузке файла
+     * он захлёбывается — пауза даёт ему разгрузиться.
+     */
+    private fun retryBackoffMs(attempt: Int): Long =
+        (250L shl (attempt - 1).coerceIn(0, 3)).coerceIn(250L, 2_000L)
+
     /**
      * Транспорт «POST↔POST chunks» (LTE 5, Selectel CDN).
      *
@@ -568,15 +583,31 @@ internal class Lte4Shim(
             if (gotData) emptyPolls.set(0)
         }
 
+        /** Пишем первый и каждый десятый повтор: иначе при шторме журнал тонет. */
+        fun logRetry(code: Int?, seq: Long, attempt: Int, waitMs: Long) {
+            if (attempt != 1 && attempt % 10 != 0) return
+            val what = code?.toString() ?: "таймаут"
+            val where = if (seq >= 0) "seq=$seq" else "poll"
+            VpnLog.add("LTE5: повтор POST ($what, $where), попытка $attempt, пауза $waitMs мс")
+        }
+
         /**
-         * Один POST. `503` ждём по `Retry-After`, `413` уменьшает кусок, сетевую
-         * ошибку повторяем один раз.
+         * Один POST. `502/503/504/499` и сетевой таймаут **повторяются с тем же
+         * телом и тем же seq**: сервер отбрасывает дубли по seq, поэтому повтор
+         * безопасен, а без него потерянный кусок блокирует всё, что после него.
+         * `410` — сессия потеряна (фатально), `413` — уменьшаем кусок, `400` — наш
+         * баг в кадре.
          *
-         * [softErrors] — для poll'ов: одиночный сетевой сбой не должен рвать
-         * соединение (в логе 148 это выглядело как «вверх работает, вниз молчит»).
-         * `410`/`502` остаются фатальными всегда: сессия умерла.
+         * [softErrors] — для poll'ов: меньше попыток и одиночный сбой не рвёт
+         * соединение.
          */
-        fun post(body: ByteArray, timeoutMs: Long, softErrors: Boolean = false): List<Lte4.Frame> {
+        fun post(
+            body: ByteArray,
+            timeoutMs: Long,
+            softErrors: Boolean = false,
+            seq: Long = -1L,
+        ): List<Lte4.Frame> {
+            val maxAttempts = if (softErrors) 3 else MAX_DATA_ATTEMPTS
             var attempt = 0
             while (true) {
                 attempt += 1
@@ -584,31 +615,34 @@ internal class Lte4Shim(
                 try {
                     return client.exchange(body, ack(), timeoutMs)
                 } catch (e: PostChunkHttpException) {
-                    when (e.code) {
-                        503 -> {
-                            val wait = (e.retryAfterMs ?: 1_000L).coerceAtLeast(100L)
-                            VpnLog.add("LTE5: сервер занят (503) — жду $wait мс")
-                            Thread.sleep(wait)
-                            if (attempt >= 3) throw e
-                        }
-                        413 -> {
+                    val retryable = e.code == 499 || e.code == 502 || e.code == 503 || e.code == 504
+                    if (!retryable) {
+                        if (e.code == 413) {
                             val reduced = (chunkBytes.get() / 2).coerceAtLeast(MIN_POST_CHUNK)
                             chunkBytes.set(reduced)
                             VpnLog.add("LTE5: 413 — уменьшаю кусок до ${reduced / 1024} КБ")
-                            throw e
                         }
-                        else -> throw e
+                        throw e
                     }
+                    if (attempt >= maxAttempts) throw e
+                    // 503 присылает Retry-After; 502/504 — отказ края открыть
+                    // соединение до ноды, ждём нарастающе.
+                    val wait = e.retryAfterMs ?: retryBackoffMs(attempt)
+                    logRetry(e.code, seq, attempt, wait)
+                    runCatching { Thread.sleep(wait) }
                 } catch (e: java.io.IOException) {
-                    if (attempt >= 2) {
+                    if (attempt >= maxAttempts) {
                         if (!softErrors) throw e
                         VpnLog.add("LTE5: poll без ответа (${e.javaClass.simpleName}) — продолжаю")
                         return emptyList()
                     }
-                    runCatching { Thread.sleep(200) }
+                    val wait = retryBackoffMs(attempt)
+                    logRetry(null, seq, attempt, wait)
+                    runCatching { Thread.sleep(wait) }
                 }
             }
         }
+
         // Аплинк: N воркеров разбирают очередь. seq назначается в порядке потока,
         // поэтому сервер соберёт куски правильно даже при параллельных POST.
         repeat(policy.parallel) { index ->
@@ -620,7 +654,13 @@ internal class Lte4Shim(
                         break
                     } ?: continue
                     try {
-                        deliver(post(PostChunks.uplinkData(item.first, item.second), PostChunks.DATA_TIMEOUT_MS))
+                        deliver(
+                            post(
+                                PostChunks.uplinkData(item.first, item.second),
+                                PostChunks.DATA_TIMEOUT_MS,
+                                seq = item.first,
+                            )
+                        )
                     } catch (e: Throwable) {
                         VpnLog.add("LTE5: аплинк остановлен (${e.javaClass.simpleName})")
                         alive.set(false)
